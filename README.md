@@ -10,7 +10,7 @@ The **NEU MOA Monitoring System** is a modern web application designed to stream
 
 ✨ **[Try the App Live Here!](https://neu-moa-monitoring-system-230692279419.us-west1.run.app)** ✨
 
-![System Preview](https://picsum.photos/seed/neu-moa/1200/400?blur=2)
+![System Preview](https://github.com/JLNerecina/NEU-MOA-Monitoring-System/blob/main/public/NEU%20MOA%20Monitoring%20System%20Preview.png)
 
 ---
 
