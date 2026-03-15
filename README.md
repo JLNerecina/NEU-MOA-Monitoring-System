@@ -128,4 +128,6 @@ This project is developed for **New Era University**. All rights reserved.
 
 <p align="center">
   Made with ❤️ for the NEU Community
+   Created by John Lian R. Nerecina
+   Github: @JLNerecina
 </p>
