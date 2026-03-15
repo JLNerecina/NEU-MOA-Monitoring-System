@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information and role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["student", "faculty", "admin"] },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "isBlocked": { "type": "boolean" },
+        "college": { "type": "string" }
+      },
+      "required": ["uid", "email", "role", "displayName"]
+    },
+    "MOA": {
+      "title": "MOA",
+      "description": "Memorandum of Agreement details.",
+      "type": "object",
+      "properties": {
+        "HTEID": { "type": "string" },
+        "Company": { "type": "string" },
+        "Address": { "type": "string" },
+        "ContactPerson": { "type": "string" },
+        "Email": { "type": "string", "format": "email" },
+        "IndustryType": { "type": "string" },
+        "EffectivityDate": { "type": "string" },
+        "Status": { "type": "string" },
+        "college": { "type": "string" },
+        "isDeleted": { "type": "boolean" },
+        "updatedBy": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["HTEID", "Company", "Address", "ContactPerson", "Email", "IndustryType", "EffectivityDate", "Status", "college"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "System activity logs.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "userCollege": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "targetId": { "type": "string" },
+        "targetType": { "type": "string" }
+      },
+      "required": ["userId", "userName", "userRole", "action", "details", "timestamp"]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "User notifications.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "read": { "type": "boolean" },
+        "type": { "type": "string" },
+        "category": { "type": "string" }
+      },
+      "required": ["userId", "title", "message", "timestamp", "read", "type", "category"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles collection."
+    },
+    "/moas/{moaId}": {
+      "schema": "MOA",
+      "description": "MOAs collection."
+    },
+    "/activities/{activityId}": {
+      "schema": "Activity",
+      "description": "Activity logs collection."
+    },
+    "/notifications/{notificationId}": {
+      "schema": "AppNotification",
+      "description": "Notifications collection."
+    }
+  }
+}

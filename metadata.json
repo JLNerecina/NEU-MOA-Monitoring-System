@@ -1,0 +1,5 @@
+{
+  "name": "NEU MOA Monitoring System",
+  "description": "A glassmorphism-based MOA Monitoring System for NEU with role-based access control.",
+  "requestFramePermissions": []
+}
