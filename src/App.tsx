@@ -495,6 +495,22 @@ export default function App() {
     }
   };
 
+  const handlePermanentDelete = async (moa: MOA) => {
+    if (!moa.id) return;
+    try {
+      await deleteDoc(doc(db, 'moas', moa.id));
+      await logActivity('PERMANENT_DELETE_MOA', `Permanently deleted MOA for ${moa.Company}`, moa.id, 'MOA');
+      
+      // Notify admins
+      const admins = users.filter(u => u.role === 'admin');
+      for (const admin of admins) {
+        await createNotification(admin.uid, 'System Activity', `${profile.displayName} permanently deleted MOA for ${moa.Company}`, 'ERROR', 'SYSTEM_ACTIVITY');
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `moas/${moa.id}`);
+    }
+  };
+
   const handleUpdate = async (moa: MOA) => {
     if (!moa.id) return;
     try {
@@ -941,6 +957,7 @@ export default function App() {
             moas={moas} 
             onSoftDelete={handleSoftDelete} 
             onRecover={handleRecover} 
+            onPermanentDelete={handlePermanentDelete}
             theme={theme}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
@@ -961,6 +978,7 @@ export default function App() {
             moas={moas} 
             onSoftDelete={handleSoftDelete} 
             onRecover={handleRecover} 
+            onPermanentDelete={handlePermanentDelete}
             onUpdate={handleUpdate} 
             trackAction={trackAction} 
             theme={theme} 
@@ -1009,6 +1027,7 @@ function DashboardView({
   moas, 
   onSoftDelete, 
   onRecover, 
+  onPermanentDelete,
   theme,
   searchQuery,
   setSearchQuery,
@@ -1025,6 +1044,7 @@ function DashboardView({
   moas: MOA[], 
   onSoftDelete: (moa: MOA) => void, 
   onRecover: (moa: MOA) => void, 
+  onPermanentDelete: (moa: MOA) => void,
   theme: 'light' | 'dark',
   searchQuery: string,
   setSearchQuery: (q: string) => void,
@@ -1037,6 +1057,7 @@ function DashboardView({
   setShowAdd: (show: boolean) => void,
   setEditingMoa: (moa: MOA | null) => void
 }) {
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const filteredMoas = moas.filter(moa => {
     // Role based visibility
     if (profile.role === 'student') {
@@ -1308,13 +1329,39 @@ function DashboardView({
                             </button>
                           )}
                           {profile.role === 'admin' && moa.isDeleted && (
-                            <button 
-                              onClick={() => onRecover(moa)}
-                              className="p-2 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-all hover:scale-110" 
-                              title="Recover"
-                            >
-                              <Shield className="w-4 h-4" />
-                            </button>
+                            <div className="flex gap-1">
+                              <button 
+                                onClick={() => onRecover(moa)}
+                                className="p-2 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10 transition-all hover:scale-110" 
+                                title="Recover"
+                              >
+                                <Shield className="w-4 h-4" />
+                              </button>
+                              {showDeleteConfirm === moa.id ? (
+                                <div className="flex gap-1 items-center">
+                                  <button 
+                                    onClick={() => { onPermanentDelete(moa); setShowDeleteConfirm(null); }}
+                                    className="px-2 py-1 bg-rose-600 text-white text-[10px] font-bold rounded hover:bg-rose-500 transition-all"
+                                  >
+                                    Confirm
+                                  </button>
+                                  <button 
+                                    onClick={() => setShowDeleteConfirm(null)}
+                                    className="px-2 py-1 bg-slate-600 text-white text-[10px] font-bold rounded hover:bg-slate-500 transition-all"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button 
+                                  onClick={() => setShowDeleteConfirm(moa.id!)}
+                                  className="p-2 rounded-lg text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 transition-all hover:scale-110" 
+                                  title="Permanent Delete"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
                           )}
                           {profile.role !== 'student' && !moa.isDeleted && (
                             <button 
@@ -1473,6 +1520,7 @@ function PartnersView({
   moas, 
   onSoftDelete, 
   onRecover, 
+  onPermanentDelete,
   onUpdate, 
   trackAction, 
   theme, 
@@ -1490,6 +1538,7 @@ function PartnersView({
   moas: MOA[], 
   onSoftDelete: (moa: MOA) => void, 
   onRecover: (moa: MOA) => void, 
+  onPermanentDelete: (moa: MOA) => void,
   onUpdate: (moa: MOA) => void, 
   trackAction: any, 
   theme: 'light' | 'dark', 
@@ -1516,6 +1565,7 @@ function PartnersView({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
 
   const validateForm = (data: Partial<MOA>) => {
     const newErrors: Record<string, string> = {};
@@ -1570,32 +1620,46 @@ function PartnersView({
 
   const seedSampleData = async () => {
     const sampleMoas: MOA[] = [
-      {
-        HTEID: 'HTE-2026-001',
-        Company: 'Tech Solutions Inc.',
-        Address: '123 Tech Ave, Makati',
-        ContactPerson: 'Juan Dela Cruz',
-        Email: 'juan@techsolutions.com',
-        IndustryType: 'Private Sector',
-        EffectivityDate: '2026-01-01',
-        Status: 'Approved: Signed by President',
-        college: 'College of Informatics and Computing Studies'
-      },
-      {
-        HTEID: 'HTE-2026-002',
-        Company: 'Global Health Corp.',
-        Address: '456 Health St, Manila',
-        ContactPerson: 'Maria Santos',
-        Email: 'maria@globalhealth.com',
-        IndustryType: 'Private Sector',
-        EffectivityDate: '2026-02-15',
-        Status: 'Processing: MOA draft sent to Legal Office for Review',
-        college: 'College of Nursing'
-      }
+      { HTEID: `HTE-SEED-${Date.now()}-001`, Company: 'Tech Solutions Inc.', Address: '123 Tech Ave, Makati', ContactPerson: 'Juan Dela Cruz', Email: 'juan@techsolutions.com', IndustryType: 'Private Sector', EffectivityDate: '2026-01-01', Status: 'Approved: Signed by President', college: 'College of Informatics and Computing Studies' },
+      { HTEID: `HTE-SEED-${Date.now()}-002`, Company: 'Global Health Corp.', Address: '456 Health St, Manila', ContactPerson: 'Maria Santos', Email: 'maria@globalhealth.com', IndustryType: 'Private Sector', EffectivityDate: '2026-02-15', Status: 'Processing: MOA draft sent to Legal Office for Review', college: 'College of Nursing' },
+      { HTEID: `HTE-SEED-${Date.now()}-003`, Company: 'Eco Builders Ltd.', Address: '789 Green Rd, Quezon City', ContactPerson: 'Ricardo Gomez', Email: 'ricardo@ecobuilders.ph', IndustryType: 'Private Sector', EffectivityDate: '2026-03-10', Status: 'Approved: No notarization needed', college: 'College of Engineering & Architecture' },
+      { HTEID: `HTE-SEED-${Date.now()}-004`, Company: 'Creative Minds Agency', Address: '101 Art St, Pasig', ContactPerson: 'Elena Reyes', Email: 'elena@creativeminds.com', IndustryType: 'Others', EffectivityDate: '2026-04-05', Status: 'Approved: Signed by President', college: 'College of Arts and Sciences' },
+      { HTEID: `HTE-SEED-${Date.now()}-005`, Company: 'National Logistics', Address: '202 Port Rd, Manila', ContactPerson: 'Carlos Santos', Email: 'carlos@natlogistics.ph', IndustryType: 'Government', EffectivityDate: '2026-05-20', Status: 'Processing: Awaiting signature of the MOA draft by HTE partner', college: 'College of Business Administration' },
+      { HTEID: `HTE-SEED-${Date.now()}-006`, Company: 'EduTech Systems', Address: '303 School Ave, Marikina', ContactPerson: 'Sarah Tan', Email: 'sarah@edutech.com', IndustryType: 'Educational Institution', EffectivityDate: '2026-06-15', Status: 'Approved: Signed by President', college: 'College of Education' },
+      { HTEID: `HTE-SEED-${Date.now()}-007`, Company: 'Global Finance Group', Address: '404 Money St, Makati', ContactPerson: 'David Lee', Email: 'david@globalfinance.com', IndustryType: 'Private Sector', EffectivityDate: '2026-07-01', Status: 'Processing: MOA draft and Opinion of Legal Office sent to VPPA/OP for approval', college: 'College of Accountancy' },
+      { HTEID: `HTE-SEED-${Date.now()}-008`, Company: 'Health & Wellness Clinic', Address: '505 Care St, Taguig', ContactPerson: 'Anna Smith', Email: 'anna@wellness.com', IndustryType: 'Private Sector', EffectivityDate: '2026-08-10', Status: 'Approved: Signed by President', college: 'College of Medical Technology' }
     ];
 
-    for (const moa of sampleMoas) {
-      await addDoc(collection(db, 'moas'), { ...moa, isDeleted: false, auditTrail: [{ userId: profile?.uid, userName: profile?.displayName, timestamp: new Date().toISOString(), action: 'CREATE' }] });
+    try {
+      let addedCount = 0;
+      for (const moa of sampleMoas) {
+        const isDuplicate = moas.some(existing => existing.Company === moa.Company && !existing.isDeleted);
+        if (isDuplicate) continue;
+        
+        const moaWithAudit = { 
+          ...moa, 
+          isDeleted: false, 
+          auditTrail: [{ 
+            userId: profile?.uid, 
+            userName: profile?.displayName, 
+            timestamp: new Date().toISOString(), 
+            action: 'CREATE' 
+          }] 
+        };
+        
+        await addDoc(collection(db, 'moas'), moaWithAudit);
+        addedCount++;
+      }
+      
+      if (addedCount > 0) {
+        await logActivity('SEED_DATA', `Seeded ${addedCount} sample partner companies`, undefined, 'SYSTEM');
+        await createNotification(profile.uid, 'Data Seeded', `Successfully added ${addedCount} sample partner companies.`, 'SUCCESS', 'SYSTEM_ACTIVITY');
+      } else {
+        await createNotification(profile.uid, 'Seed Skipped', 'Sample companies already exist in the database.', 'INFO', 'SYSTEM_ACTIVITY');
+      }
+    } catch (error) {
+      console.error("Error seeding data:", error);
+      handleFirestoreError(error, OperationType.WRITE, 'moas');
     }
   };
 
@@ -1680,7 +1744,7 @@ function PartnersView({
           <h2 className={cn("text-2xl font-bold tracking-tight", theme === 'dark' ? "text-white" : "text-slate-900")}>Partner Companies</h2>
           <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mt-1">External Collaboration Network</p>
         </div>
-        {profile.role === 'admin' && moas.length === 0 && (
+        {profile.role === 'admin' && (
           <button 
             onClick={seedSampleData}
             className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20 active:scale-95"
@@ -1959,7 +2023,10 @@ function PartnersView({
                 <div className="flex gap-1">
                   {profile.role !== 'student' && !moa.isDeleted && (
                     <button 
-                      onClick={() => setEditingMoa(moa)}
+                      onClick={() => {
+                        setEditingMoa(moa);
+                        setShowAdd(true);
+                      }}
                       className="p-2.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-xl transition-all"
                     >
                       <Edit2 className="w-4 h-4" />
@@ -1974,12 +2041,39 @@ function PartnersView({
                     </button>
                   )}
                   {profile.role === 'admin' && moa.isDeleted && (
-                    <button 
-                      onClick={() => onRecover(moa)}
-                      className="p-2.5 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 rounded-xl transition-all"
-                    >
-                      <Shield className="w-4 h-4" />
-                    </button>
+                    <div className="flex gap-1">
+                      <button 
+                        onClick={() => onRecover(moa)}
+                        className="p-2.5 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 rounded-xl transition-all"
+                        title="Recover"
+                      >
+                        <Shield className="w-4 h-4" />
+                      </button>
+                      {showDeleteConfirm === moa.id ? (
+                        <div className="flex gap-1 items-center">
+                          <button 
+                            onClick={() => { onPermanentDelete(moa); setShowDeleteConfirm(null); }}
+                            className="px-2 py-1 bg-rose-600 text-white text-[10px] font-bold rounded hover:bg-rose-500 transition-all"
+                          >
+                            Confirm
+                          </button>
+                          <button 
+                            onClick={() => setShowDeleteConfirm(null)}
+                            className="px-2 py-1 bg-slate-600 text-white text-[10px] font-bold rounded hover:bg-slate-500 transition-all"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button 
+                          onClick={() => setShowDeleteConfirm(moa.id!)}
+                          className="p-2.5 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 rounded-xl transition-all"
+                          title="Permanent Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -3140,8 +3234,20 @@ function MapController({ center }: { center: [number, number] }) {
   return null;
 }
 
+const customIcon = new L.Icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
 function PartnerMapView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' }) {
-  const activeMoas = moas.filter(m => !m.isDeleted && m.Status.startsWith('Approved'));
+  console.log("MOAs data:", moas);
+  const activeMoas = moas.filter(m => !m.isDeleted);
+  console.log("Total active MOAs:", activeMoas.length);
+  console.log("MOAs with coordinates:", activeMoas.filter(m => m.coordinates).length);
   const [mapCenter, setMapCenter] = useState<[number, number]>([14.5995, 120.9842]);
   const [selectedMoaId, setSelectedMoaId] = useState<string | null>(null);
 
@@ -3153,29 +3259,35 @@ function PartnerMapView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' 
   };
 
   const seedSampleData = async () => {
-    const sampleCoords = [
-      { lat: 14.5995, lng: 120.9842 }, // Manila
-      { lat: 14.5547, lng: 121.0244 }, // Makati
-      { lat: 14.6760, lng: 121.0437 }, // Quezon City
-      { lat: 14.5794, lng: 121.0359 }, // Mandaluyong
-      { lat: 14.5351, lng: 121.0313 }, // Taguig
-      { lat: 14.4445, lng: 120.9473 }, // Cavite
-      { lat: 14.6507, lng: 121.1029 }, // Marikina
-      { lat: 14.5733, lng: 121.0597 }, // Pasig
-    ];
+    // Accurate coordinates for each company based on their address
+    const companyCoords: { [key: string]: { lat: number, lng: number } } = {
+      'Accenture Philippines': { lat: 14.5547, lng: 121.0244 }, // Makati
+      'EduTech Systems': { lat: 14.6507, lng: 121.1029 }, // Marikina
+      'Global Health Corp.': { lat: 14.5995, lng: 120.9842 }, // Manila
+      'Eco Builders Ltd.': { lat: 14.6760, lng: 121.0437 }, // Quezon City
+      'Tech Solutions Inc.': { lat: 14.5351, lng: 121.0313 }, // Taguig
+      'Health & Wellness Clinic': { lat: 14.5351, lng: 121.0313 }, // Taguig (example)
+      'Creative Minds Agency': { lat: 14.5794, lng: 121.0359 }, // Mandaluyong
+      'Global Finance Group': { lat: 14.5547, lng: 121.0244 }, // Makati
+      'National Logistics': { lat: 14.5733, lng: 121.0597 }, // Pasig
+    };
 
-    const moasToUpdate = activeMoas.filter(m => !m.coordinates).slice(0, sampleCoords.length);
+    console.log(`Updating all ${activeMoas.length} partners with accurate locations.`);
     
-    for (let i = 0; i < moasToUpdate.length; i++) {
-      const moa = moasToUpdate[i];
-      const coords = sampleCoords[i];
-      try {
-        await setDoc(doc(db, 'moas', moa.id!), {
-          ...moa,
-          coordinates: coords
-        }, { merge: true });
-      } catch (error) {
-        console.error("Error seeding data:", error);
+    for (const moa of activeMoas) {
+      const coords = companyCoords[moa.Company];
+      if (coords) {
+        console.log(`Updating ${moa.Company} with accurate coords:`, coords);
+        try {
+          await setDoc(doc(db, 'moas', moa.id!), {
+            ...moa,
+            coordinates: coords
+          }, { merge: true });
+        } catch (error) {
+          console.error("Error seeding map data for", moa.Company, error);
+        }
+      } else {
+        console.warn(`No accurate coordinates found for ${moa.Company}`);
       }
     }
   };
@@ -3190,7 +3302,7 @@ function PartnerMapView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' 
           <p className="text-sm text-slate-500">Visualizing our global network of industry partners and academic collaborators using OpenStreetMap.</p>
         </div>
         <div className="flex gap-3">
-          {!hasMappedPartners && activeMoas.length > 0 && (
+          {activeMoas.length > 0 && (
             <button 
               onClick={seedSampleData}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 text-emerald-500 text-xs font-bold hover:bg-emerald-500/20 transition-all"
@@ -3221,10 +3333,12 @@ function PartnerMapView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' 
             <MapController center={mapCenter} />
             {activeMoas.map(moa => {
               if (!moa.coordinates) return null;
+              console.log(`Rendering marker for: ${moa.Company}, ID: ${moa.id}, Pos: [${moa.coordinates.lat}, ${moa.coordinates.lng}]`);
               return (
                 <Marker 
                   key={moa.id} 
                   position={[moa.coordinates.lat, moa.coordinates.lng]}
+                  icon={customIcon}
                   eventHandlers={{
                     click: () => setSelectedMoaId(moa.id || null),
                   }}

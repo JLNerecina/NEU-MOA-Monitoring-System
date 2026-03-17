@@ -149,7 +149,7 @@ service cloud.firestore {
       allow create: if isFaculty() && !isBlocked() && isValidMOA(request.resource.data);
       allow update: if isFaculty() && !isBlocked() && isValidMOA(request.resource.data) &&
                     (isAdmin() || (resource.data.get('isDeleted', false) == false && request.resource.data.get('isDeleted', false) == false));
-      allow delete: if false;
+      allow delete: if isAdmin() && !isBlocked();
     }
 
     match /activities/{activityId} {
