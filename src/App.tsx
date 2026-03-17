@@ -4,7 +4,7 @@ import { signInWithPopup, onAuthStateChanged, signOut, User } from 'firebase/aut
 import { doc, getDoc, setDoc, collection, onSnapshot, query, addDoc, deleteDoc, where } from 'firebase/firestore';
 import { UserProfile, MOA, UserRole, MOAStatus, IndustryType, Activity, AppNotification } from './types';
 import { Layout, GlassCard } from './components/Layout';
-import { LogIn, LogOut, Shield, FileText, Users, Search, Plus, Eye, Trash2, LayoutDashboard, Building2, UserCircle, Sun, Moon, Settings, ChevronLeft, ChevronRight, Calendar as CalendarIcon, Edit2, X, Check, UserPlus, Lock, Download, EyeOff, Key, History, Bell, Info, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react';
+import { LogIn, LogOut, Shield, FileText, Users, Search, Plus, Eye, Trash2, LayoutDashboard, Building2, UserCircle, Sun, Moon, Settings, ChevronLeft, ChevronRight, ChevronDown, Calendar as CalendarIcon, Edit2, X, Check, UserPlus, Lock, Download, EyeOff, Key, History, Bell, Info, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react';
 import { cn } from './lib/utils';
 import { 
   format, 
@@ -184,9 +184,69 @@ function DatePicker({ value, onChange, theme, placeholder, alignRight }: { value
   );
 }
 
+function RoleSwitcher({ currentRole, onSwitch, theme }: { currentRole: UserRole, onSwitch: (role: UserRole | null) => void, theme: 'light' | 'dark' }) {
+  const [isOpen, setIsOpen] = useState(false);
+  
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={cn(
+          "px-4 py-2 rounded-xl border backdrop-blur-xl flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider transition-all shadow-sm",
+          theme === 'dark' ? "bg-white/5 border-white/10 text-white" : "bg-white border-slate-200 text-slate-900"
+        )}
+      >
+        <Shield className="w-3 h-3 text-blue-500" />
+        <span>Role: {currentRole}</span>
+        <ChevronDown className={cn("w-3 h-3 transition-transform", isOpen && "rotate-180")} />
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+            <motion.div
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              className={cn(
+                "absolute top-full right-0 mt-2 z-50 w-40 shadow-2xl rounded-xl border backdrop-blur-2xl overflow-hidden",
+                theme === 'dark' ? "bg-slate-900/95 border-white/10" : "bg-white/95 border-slate-200"
+              )}
+            >
+              {(['admin', 'faculty', 'student'] as UserRole[]).map((role) => (
+                <button
+                  key={role}
+                  onClick={() => {
+                    onSwitch(role === 'admin' ? null : role);
+                    setIsOpen(false);
+                  }}
+                  className={cn(
+                    "w-full px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-wider transition-all",
+                    currentRole === role
+                      ? "bg-blue-600 text-white"
+                      : theme === 'dark'
+                        ? "text-slate-400 hover:text-white hover:bg-white/5"
+                        : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                  )}
+                >
+                  {role}
+                </button>
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [impersonatedRole, setImpersonatedRole] = useState<UserRole | null>(null);
+  const effectiveRole = impersonatedRole || profile?.role;
+  const effectiveProfile = profile ? { ...profile, role: effectiveRole as UserRole } : null;
   const [loading, setLoading] = useState(true);
   const [moas, setMoas] = useState<MOA[]>([]);
   const [viewingMoa, setViewingMoa] = useState<MOA | null>(null);
@@ -202,6 +262,7 @@ export default function App() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showViewDropdown, setShowViewDropdown] = useState(false);
   const [showUserAdmin, setShowUserAdmin] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [collegeFilter, setCollegeFilter] = useState('All');
@@ -220,20 +281,22 @@ export default function App() {
   }, [profile]);
 
   useEffect(() => {
-    if (profile?.role === 'admin') {
+    if (effectiveRole === 'admin') {
       const unsubscribe = onSnapshot(collection(db, 'users'), (snapshot) => {
         const userData = snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile));
         setUsers(userData);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'users');
       });
       return () => unsubscribe();
     }
-  }, [profile]);
+  }, [effectiveRole]);
 
   useEffect(() => {
     if (!profile) return;
     
     // Admins see all activities, others see only their own
-    const q = profile.role === 'admin' 
+    const q = effectiveRole === 'admin' 
       ? query(collection(db, 'activities'))
       : query(collection(db, 'activities'), where('userId', '==', profile.uid));
 
@@ -241,27 +304,31 @@ export default function App() {
       const activityData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Activity))
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       setActivities(activityData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'activities');
     });
     return () => unsubscribe();
-  }, [profile]);
+  }, [profile, effectiveRole]);
 
   useEffect(() => {
     if (!profile) return;
 
     // Admins can see all notifications (to filter for SYSTEM_ALERTs), others see only their own
-    const q = profile.role === 'admin'
+    const q = effectiveRole === 'admin'
       ? query(collection(db, 'notifications'))
       : query(collection(db, 'notifications'), where('userId', '==', profile.uid));
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const notifData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppNotification))
-        .filter(n => n.userId === profile.uid || (profile.role === 'admin' && n.category === 'SYSTEM_ALERT'))
+        .filter(n => n.userId === profile.uid || (effectiveRole === 'admin' && n.category === 'SYSTEM_ALERT'))
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       
       setNotifications(notifData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'notifications');
     });
     return () => unsubscribe();
-  }, [profile]);
+  }, [profile, effectiveRole]);
 
   const logActivity = async (action: string, details: string, targetId?: string, targetType?: Activity['targetType']) => {
     if (!profile) return;
@@ -396,7 +463,7 @@ export default function App() {
       }
 
       // Notify faculty
-      if (profile.role === 'faculty') {
+      if (effectiveRole === 'faculty') {
         await createNotification(profile.uid, 'Action Recorded', `You updated the MOA for ${moa.Company}`, 'SUCCESS', 'USER_ACTION');
       }
 
@@ -428,10 +495,14 @@ export default function App() {
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
-            const data = docSnap.data() as UserProfile;
-            if (data.email === 'johnliannerecina@gmail.com') {
-              data.role = 'admin';
+            let data = docSnap.data() as UserProfile;
+            
+            // Safety check: Ensure owner is always admin
+            if (firebaseUser.email === 'johnliannerecina@gmail.com' && data.role !== 'admin') {
+              data = { ...data, role: 'admin' };
+              await setDoc(docRef, data);
             }
+
             if (data.isBlocked) {
               await signOut(auth);
               alert('Your account has been blocked. Please contact the administrator.');
@@ -440,10 +511,27 @@ export default function App() {
             }
             setProfile(data);
           } else {
+            // Check for pre-authorized role
+            let assignedRole: UserRole = 'student';
+            try {
+              const preAuthRef = doc(db, 'pre_authorized_roles', firebaseUser.email!);
+              const preAuthSnap = await getDoc(preAuthRef);
+              if (preAuthSnap.exists()) {
+                assignedRole = preAuthSnap.data().role as UserRole;
+              } else if (firebaseUser.email === 'johnliannerecina@gmail.com') {
+                assignedRole = 'admin';
+              }
+            } catch (e) {
+              console.error('Error checking pre-authorized roles:', e);
+              if (firebaseUser.email === 'johnliannerecina@gmail.com') {
+                assignedRole = 'admin';
+              }
+            }
+
             const newProfile: UserProfile = {
               uid: firebaseUser.uid,
               email: firebaseUser.email!,
-              role: firebaseUser.email === 'johnliannerecina@gmail.com' ? 'admin' : 'student',
+              role: assignedRole,
               displayName: firebaseUser.displayName || 'User',
               photoURL: firebaseUser.photoURL || '',
             };
@@ -579,39 +667,88 @@ export default function App() {
             <div>
               <h1 className={cn("text-xl md:text-3xl font-bold tracking-tight", theme === 'dark' ? "text-white" : "text-slate-900")}>MOA Monitoring</h1>
               <p className={cn("text-[10px] md:text-sm font-medium uppercase tracking-widest", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>
-                {profile.role.toUpperCase()} DASHBOARD • {view.toUpperCase()} VIEW
+                {effectiveRole?.toUpperCase()} DASHBOARD • {view.toUpperCase()} VIEW
               </p>
             </div>
           </div>
           
-          <nav className={cn(
-            "backdrop-blur-xl border p-1.5 md:p-2 rounded-2xl md:rounded-3xl flex items-center gap-1 md:gap-2 w-full lg:w-auto overflow-x-auto no-scrollbar",
-            theme === 'dark' ? "bg-white/5 border-white/10" : "bg-white/70 border-slate-200 shadow-sm"
-          )}>
-            {[
-              { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-              { id: 'partners', label: 'Partners', icon: Building2 },
-              { id: 'account', label: 'Account', icon: UserCircle },
-            ].map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setView(item.id as any)}
-                className={cn(
-                  "px-4 md:px-6 py-2.5 md:py-3 rounded-xl md:rounded-2xl text-xs md:text-sm font-semibold transition-all flex items-center gap-2 shrink-0 flex-1 lg:flex-none justify-center",
-                  view === item.id 
-                    ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" 
-                    : theme === 'dark' 
-                      ? "text-slate-400 hover:text-white hover:bg-white/5" 
-                      : "text-slate-500 hover:text-slate-900 hover:bg-slate-100"
-                )}
-              >
-                <item.icon className="w-4 h-4" />
-                <span className="hidden sm:inline">{item.label}</span>
-              </button>
-            ))}
-          </nav>
+          <div className="relative">
+            <button
+              onClick={() => setShowViewDropdown(!showViewDropdown)}
+              className={cn(
+                "backdrop-blur-xl border p-2 md:p-3 rounded-2xl md:rounded-3xl flex items-center gap-3 w-48 md:w-56 font-semibold transition-all shadow-sm",
+                theme === 'dark' ? "bg-white/5 border-white/10 text-white" : "bg-white border-slate-200 text-slate-900"
+              )}
+            >
+              {(() => {
+                const current = [
+                  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+                  { id: 'partners', label: 'Partners', icon: Building2 },
+                  { id: 'account', label: 'Account', icon: UserCircle },
+                ].find(i => i.id === view);
+                return current ? (
+                  <>
+                    <current.icon className="w-5 h-5 text-blue-500" />
+                    <span className="flex-1 text-left">{current.label}</span>
+                  </>
+                ) : null;
+              })()}
+              <ChevronDown className={cn("w-4 h-4 transition-transform", showViewDropdown && "rotate-180")} />
+            </button>
+
+            <AnimatePresence>
+              {showViewDropdown && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowViewDropdown(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className={cn(
+                      "absolute top-full left-0 right-0 mt-2 z-50 shadow-2xl rounded-2xl border backdrop-blur-2xl overflow-hidden",
+                      theme === 'dark' ? "bg-slate-900/95 border-white/10" : "bg-white/95 border-slate-200"
+                    )}
+                  >
+                    {[
+                      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+                      { id: 'partners', label: 'Partners', icon: Building2 },
+                      { id: 'account', label: 'Account', icon: UserCircle },
+                    ].map((item) => (
+                      <button
+                        key={item.id}
+                        onClick={() => {
+                          setView(item.id as any);
+                          setShowViewDropdown(false);
+                        }}
+                        className={cn(
+                          "w-full px-4 py-3.5 flex items-center gap-3 text-sm font-semibold transition-all",
+                          view === item.id 
+                            ? "bg-blue-600 text-white" 
+                            : theme === 'dark' 
+                              ? "text-slate-400 hover:text-white hover:bg-white/5" 
+                              : "text-slate-500 hover:text-slate-900 hover:bg-slate-50"
+                        )}
+                      >
+                        <item.icon className={cn("w-4 h-4", view === item.id ? "text-white" : "text-blue-500")} />
+                        {item.label}
+                      </button>
+                    ))}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
 
           <div className={cn("flex items-center gap-3 md:gap-4 pl-0 lg:pl-4 border-l-0 lg:border-l w-full lg:w-auto justify-center lg:justify-end", theme === 'dark' ? "border-white/10" : "border-slate-200")}>
+            {profile.role === 'admin' && (
+              <div className="hidden md:block">
+                <RoleSwitcher 
+                  currentRole={effectiveRole as UserRole} 
+                  onSwitch={setImpersonatedRole} 
+                  theme={theme} 
+                />
+              </div>
+            )}
             <div className="relative">
               <button 
                 onClick={() => setShowNotifications(!showNotifications)}
@@ -707,7 +844,10 @@ export default function App() {
             </button>
             <div className="text-right hidden md:block">
               <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{profile.displayName}</p>
-              <p className={cn("text-[10px] uppercase tracking-widest", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>{profile.role}</p>
+              <p className={cn("text-[10px] uppercase tracking-widest", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>
+                {effectiveRole}
+                {impersonatedRole && <span className="ml-1 text-blue-500 font-bold">(Impersonating)</span>}
+              </p>
             </div>
             <img src={profile.photoURL} alt="Profile" className={cn("w-8 h-8 md:w-10 md:h-10 rounded-full border-2", theme === 'dark' ? "border-white/10" : "border-slate-200")} />
             <button onClick={handleLogout} className={cn("p-2 transition-colors", theme === 'dark' ? "text-slate-400 hover:text-rose-400" : "text-slate-500 hover:text-rose-600")}>
@@ -716,9 +856,9 @@ export default function App() {
           </div>
         </header>
 
-        {view === 'dashboard' && (
+        {view === 'dashboard' && effectiveProfile && (
           <DashboardView 
-            profile={profile} 
+            profile={effectiveProfile} 
             moas={moas} 
             onSoftDelete={handleSoftDelete} 
             onRecover={handleRecover} 
@@ -734,9 +874,9 @@ export default function App() {
           />
         )}
 
-        {view === 'partners' && (
+        {view === 'partners' && effectiveProfile && (
           <PartnersView 
-            profile={profile} 
+            profile={effectiveProfile} 
             moas={moas} 
             onSoftDelete={handleSoftDelete} 
             onRecover={handleRecover} 
@@ -751,10 +891,10 @@ export default function App() {
           />
         )}
 
-        {view === 'account' && (
+        {view === 'account' && effectiveProfile && (
           <div className="space-y-8">
-            <AccountView profile={profile} theme={theme} moas={moas} activities={activities} />
-            {profile.role === 'admin' && (
+            <AccountView profile={effectiveProfile} theme={theme} moas={moas} activities={activities} />
+            {effectiveRole === 'admin' && (
               <>
                 <UserAdminView users={users} theme={theme} />
                 <SystemActivityView activities={activities} theme={theme} />
@@ -1718,7 +1858,179 @@ function SystemActivityView({ activities, theme }: { activities: Activity[], the
     </GlassCard>
   );
 }
+function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
+  const [preAuths, setPreAuths] = useState<{ email: string, role: string }[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newPreAuth, setNewPreAuth] = useState({ email: '', role: 'admin' as UserRole });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'pre_authorized_roles'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ email: doc.id, ...doc.data() } as { email: string, role: string }));
+      setPreAuths(data);
+      setLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'pre_authorized_roles');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPreAuth.email.endsWith('@neu.edu.ph') && newPreAuth.email !== 'johnliannerecina@gmail.com') {
+      alert('Only @neu.edu.ph emails are allowed.');
+      return;
+    }
+    try {
+      await setDoc(doc(db, 'pre_authorized_roles', newPreAuth.email), { role: newPreAuth.role });
+      setShowAdd(false);
+      setNewPreAuth({ email: '', role: 'admin' });
+    } catch (error) {
+      console.error('Error adding pre-authorized role:', error);
+    }
+  };
+
+  const handleDelete = async (email: string) => {
+    try {
+      await deleteDoc(doc(db, 'pre_authorized_roles', email));
+    } catch (error) {
+      console.error('Error deleting pre-authorized role:', error);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <GlassCard theme={theme} className="p-8 border-blue-500/10">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-2xl bg-blue-600/10 text-blue-400 shadow-inner">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className={cn("text-xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>Pre-authorized Roles</h3>
+              <p className={cn("text-xs font-medium mt-1", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>
+                Emails in this list will automatically receive their assigned role upon first login.
+              </p>
+            </div>
+          </div>
+          <button 
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-600/20 active:scale-95"
+          >
+            <Plus className="w-4 h-4" /> Add Emails
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : preAuths.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-white/5 rounded-3xl">
+            <p className="text-slate-500 text-sm font-medium">No pre-authorized roles found.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {preAuths.map((pa) => (
+              <div 
+                key={pa.email} 
+                className={cn(
+                  "p-5 rounded-3xl border transition-all group relative overflow-hidden",
+                  theme === 'dark' ? "bg-white/5 border-white/5 hover:bg-white/10" : "bg-slate-50 border-slate-200 hover:bg-white hover:shadow-xl"
+                )}
+              >
+                <div className="flex justify-between items-start relative z-10">
+                  <div className="min-w-0">
+                    <p className={cn("text-sm font-bold truncate mb-2", theme === 'dark' ? "text-white" : "text-slate-900")}>{pa.email}</p>
+                    <span className="px-3 py-1 rounded-lg bg-indigo-500/20 text-indigo-400 text-[10px] font-black uppercase tracking-widest border border-indigo-500/30">
+                      {pa.role}
+                    </span>
+                  </div>
+                  <button 
+                    onClick={() => handleDelete(pa.email)}
+                    className="p-2 text-slate-500 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="absolute top-0 right-0 w-16 h-16 bg-blue-600/5 rounded-bl-full -mr-8 -mt-8" />
+              </div>
+            ))}
+          </div>
+        )}
+      </GlassCard>
+
+      {showAdd && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={cn(
+              "w-full max-w-md p-8 rounded-3xl border shadow-2xl",
+              theme === 'dark' ? "bg-slate-900 border-white/10" : "bg-white border-slate-200"
+            )}
+          >
+            <h3 className={cn("text-xl font-bold mb-6", theme === 'dark' ? "text-white" : "text-slate-900")}>Add Pre-authorized Email</h3>
+            <form onSubmit={handleAdd} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Email Address</label>
+                <input 
+                  type="email" 
+                  placeholder="e.g. jcesperanza@neu.edu.ph" 
+                  required 
+                  value={newPreAuth.email} 
+                  onChange={e => setNewPreAuth({...newPreAuth, email: e.target.value})} 
+                  className={cn(
+                    "w-full p-4 rounded-2xl border transition-all outline-none focus:ring-2 focus:ring-blue-500/50",
+                    theme === 'dark' ? "bg-white/5 border-white/10 text-white" : "bg-slate-50 border-slate-200 text-slate-900"
+                  )}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Assigned Role</label>
+                <select 
+                  value={newPreAuth.role} 
+                  onChange={e => setNewPreAuth({...newPreAuth, role: e.target.value as UserRole})} 
+                  className={cn(
+                    "w-full p-4 rounded-2xl border transition-all outline-none focus:ring-2 focus:ring-blue-500/50 appearance-none bg-no-repeat bg-[right_1rem_center] bg-[length:1.2em_1.2em]",
+                    theme === 'dark' 
+                      ? "bg-white/5 border-white/10 text-white bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2360a5fa%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
+                      : "bg-slate-50 border-slate-200 text-slate-900 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%232563eb%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
+                  )}
+                >
+                  <option value="admin">Admin</option>
+                  <option value="faculty">Faculty</option>
+                  <option value="student">Student</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setShowAdd(false)} 
+                  className={cn(
+                    "px-6 py-3 rounded-xl text-xs font-bold transition-all",
+                    theme === 'dark' ? "bg-white/5 text-slate-400 hover:bg-white/10" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  )}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="px-8 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-600/20 transition-all active:scale-95"
+                >
+                  Authorize Email
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UserAdminView({ users, theme }: { users: UserProfile[], theme: 'light' | 'dark' }) {
+  const [activeTab, setActiveTab] = useState<'directory' | 'preauth'>('directory');
   const handleToggleBlock = async (user: UserProfile) => {
     try {
       await setDoc(doc(db, 'users', user.uid), { ...user, isBlocked: !user.isBlocked });
@@ -1768,70 +2080,174 @@ function UserAdminView({ users, theme }: { users: UserProfile[], theme: 'light' 
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>User Management</h2>
-        <div className="flex items-center gap-4">
-          <span className="text-xs font-medium text-slate-500">{users.length} Total Users</span>
-          <button 
-            onClick={() => setShowAddUser(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all"
-          >
-            <UserPlus className="w-4 h-4" /> Add User
-          </button>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+        <div className="flex flex-col gap-4">
+          <h2 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>User Management</h2>
+          <div className={cn(
+            "flex p-1 rounded-2xl border w-fit",
+            theme === 'dark' ? "bg-white/5 border-white/10" : "bg-slate-100 border-slate-200"
+          )}>
+            <button 
+              onClick={() => setActiveTab('directory')}
+              className={cn(
+                "px-6 py-2.5 rounded-xl text-xs font-bold transition-all",
+                activeTab === 'directory' 
+                  ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" 
+                  : "text-slate-500 hover:text-slate-400"
+              )}
+            >
+              User Directory
+            </button>
+            <button 
+              onClick={() => setActiveTab('preauth')}
+              className={cn(
+                "px-6 py-2.5 rounded-xl text-xs font-bold transition-all",
+                activeTab === 'preauth' 
+                  ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20" 
+                  : "text-slate-500 hover:text-slate-400"
+              )}
+            >
+              Pre-authorized Roles
+            </button>
+          </div>
         </div>
+        
+        {activeTab === 'directory' && (
+          <div className="flex items-center gap-4">
+            <span className="text-xs font-medium text-slate-500">{users.length} Total Users</span>
+            <button 
+              onClick={() => setShowAddUser(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all"
+            >
+              <UserPlus className="w-4 h-4" /> Add User
+            </button>
+          </div>
+        )}
       </div>
 
-      {showAddUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <GlassCard theme={theme} className="w-full max-w-md p-6">
-            <h3 className={cn("text-lg font-bold mb-4", theme === 'dark' ? "text-white" : "text-slate-900")}>Add New User</h3>
-            <form onSubmit={handleAddUser} className="space-y-4">
-              <input type="email" placeholder="Email" required value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full p-2 rounded-lg border bg-transparent" />
-              <input type="text" placeholder="Display Name" required value={newUser.displayName} onChange={e => setNewUser({...newUser, displayName: e.target.value})} className="w-full p-2 rounded-lg border bg-transparent" />
-              <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as UserRole})} className="w-full p-2 rounded-lg border bg-transparent">
-                <option value="student">Student</option>
-                <option value="faculty">Faculty</option>
-                <option value="admin">Admin</option>
-              </select>
-              <div className="flex justify-end gap-2">
-                <button type="button" onClick={() => setShowAddUser(false)} className="px-4 py-2 rounded-lg bg-slate-500/20">Cancel</button>
-                <button type="submit" className="px-4 py-2 rounded-lg bg-blue-600 text-white">Add</button>
-              </div>
-            </form>
-          </GlassCard>
-        </div>
-      )}
+      {activeTab === 'directory' ? (
+        <>
+          {showAddUser && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <GlassCard theme={theme} className="w-full max-w-md p-6">
+                <h3 className={cn("text-lg font-bold mb-4", theme === 'dark' ? "text-white" : "text-slate-900")}>Add New User</h3>
+                <form onSubmit={handleAddUser} className="space-y-4">
+                  <input type="email" placeholder="Email" required value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full p-2 rounded-lg border bg-transparent" />
+                  <input type="text" placeholder="Display Name" required value={newUser.displayName} onChange={e => setNewUser({...newUser, displayName: e.target.value})} className="w-full p-2 rounded-lg border bg-transparent" />
+                  <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as UserRole})} className="w-full p-2 rounded-lg border bg-transparent">
+                    <option value="student">Student</option>
+                    <option value="faculty">Faculty</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <div className="flex justify-end gap-2">
+                    <button type="button" onClick={() => setShowAddUser(false)} className="px-4 py-2 rounded-lg bg-slate-500/20">Cancel</button>
+                    <button type="submit" className="px-4 py-2 rounded-lg bg-blue-600 text-white">Add</button>
+                  </div>
+                </form>
+              </GlassCard>
+            </div>
+          )}
 
-      {/* Desktop Table View */}
-      <GlassCard theme={theme} className="hidden md:block overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className={cn("border-b", theme === 'dark' ? "border-white/10 bg-white/5" : "border-slate-200 bg-slate-50/50")}>
-                <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>User</th>
-                <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Role</th>
-                <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Status</th>
-                <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider text-right", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Actions</th>
-              </tr>
-            </thead>
-            <tbody className={cn("divide-y", theme === 'dark' ? "divide-white/5" : "divide-slate-200")}>
-              {users.map((u) => (
-                <tr key={u.uid} className={cn("transition-colors", theme === 'dark' ? "hover:bg-white/5" : "hover:bg-slate-50")}>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <img src={u.photoURL} className="w-8 h-8 rounded-full" alt="" />
-                      <div>
-                        <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{u.displayName}</p>
-                        <p className="text-[10px] text-slate-500">{u.email}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
+          {/* Desktop Table View */}
+          <GlassCard theme={theme} className="hidden md:block overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className={cn("border-b", theme === 'dark' ? "border-white/10 bg-white/5" : "border-slate-200 bg-slate-50/50")}>
+                    <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>User</th>
+                    <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Role</th>
+                    <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Status</th>
+                    <th className={cn("px-6 py-4 text-xs font-bold uppercase tracking-wider text-right", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody className={cn("divide-y", theme === 'dark' ? "divide-white/5" : "divide-slate-200")}>
+                  {users.map((u) => (
+                    <tr key={u.uid} className={cn("transition-colors", theme === 'dark' ? "hover:bg-white/5" : "hover:bg-slate-50")}>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <img src={u.photoURL} className="w-8 h-8 rounded-full" alt="" />
+                          <div>
+                            <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{u.displayName}</p>
+                            <p className="text-[10px] text-slate-500">{u.email}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <select 
+                          value={u.role}
+                          onChange={e => handleChangeRole(u, e.target.value as UserRole)}
+                          className={cn(
+                            "text-xs font-bold uppercase tracking-wider border rounded-lg px-2 py-1 appearance-none bg-no-repeat bg-[right_0.4rem_center] bg-[length:0.8em_0.8em] pr-6",
+                            theme === 'dark' 
+                              ? "bg-slate-800/50 border-white/10 text-blue-400 focus:border-blue-500/50 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2360a5fa%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
+                              : "bg-white border-slate-200 text-blue-600 focus:border-blue-500 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%232563eb%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
+                          )}
+                        >
+                          <option value="student">Student</option>
+                          <option value="faculty">Faculty</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                          u.isBlocked ? "bg-rose-500/20 text-rose-400" : "bg-emerald-500/20 text-emerald-400"
+                        )}>
+                          {u.isBlocked ? 'Blocked' : 'Active'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
+                        <button 
+                          onClick={() => handleToggleBlock(u)}
+                          className={cn(
+                            "px-3 py-1 rounded-lg text-xs font-bold transition-all",
+                            u.isBlocked 
+                              ? "bg-emerald-600 text-white hover:bg-emerald-500" 
+                              : "bg-rose-600 text-white hover:bg-rose-500"
+                          )}
+                        >
+                          {u.isBlocked ? 'Unblock' : 'Block'}
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteUser(u.uid)}
+                          className="p-2 rounded-lg bg-rose-600/10 text-rose-400 hover:bg-rose-600/20 transition-all"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </GlassCard>
+
+          {/* Mobile Card View */}
+          <div className="md:hidden space-y-4">
+            {users.map((u) => (
+              <GlassCard key={u.uid} theme={theme} className="p-4 space-y-4">
+                <div className="flex items-center gap-3">
+                  <img src={u.photoURL} className="w-12 h-12 rounded-xl" alt="" />
+                  <div className="flex-1 min-w-0">
+                    <p className={cn("text-sm font-bold truncate", theme === 'dark' ? "text-white" : "text-slate-900")}>{u.displayName}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{u.email}</p>
+                  </div>
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0",
+                    u.isBlocked ? "bg-rose-500/20 text-rose-400" : "bg-emerald-500/20 text-emerald-400"
+                  )}>
+                    {u.isBlocked ? 'Blocked' : 'Active'}
+                  </span>
+                </div>
+                
+                <div className="flex items-center justify-between gap-4 pt-2 border-t border-white/5">
+                  <div className="flex-1">
+                    <label className="text-[9px] font-bold uppercase text-slate-500 block mb-1">User Role</label>
                     <select 
                       value={u.role}
                       onChange={e => handleChangeRole(u, e.target.value as UserRole)}
                       className={cn(
-                        "text-xs font-bold uppercase tracking-wider border rounded-lg px-2 py-1 appearance-none bg-no-repeat bg-[right_0.4rem_center] bg-[length:0.8em_0.8em] pr-6",
+                        "w-full text-xs font-bold uppercase tracking-wider border rounded-lg px-2 py-2 appearance-none bg-no-repeat bg-[right_0.5rem_center] bg-[length:1em_1em]",
                         theme === 'dark' 
                           ? "bg-slate-800/50 border-white/10 text-blue-400 focus:border-blue-500/50 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2360a5fa%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
                           : "bg-white border-slate-200 text-blue-600 focus:border-blue-500 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%232563eb%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
@@ -1841,20 +2257,12 @@ function UserAdminView({ users, theme }: { users: UserProfile[], theme: 'light' 
                       <option value="faculty">Faculty</option>
                       <option value="admin">Admin</option>
                     </select>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={cn(
-                      "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                      u.isBlocked ? "bg-rose-500/20 text-rose-400" : "bg-emerald-500/20 text-emerald-400"
-                    )}>
-                      {u.isBlocked ? 'Blocked' : 'Active'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
+                  </div>
+                  <div className="shrink-0 pt-4">
                     <button 
                       onClick={() => handleToggleBlock(u)}
                       className={cn(
-                        "px-3 py-1 rounded-lg text-xs font-bold transition-all",
+                        "px-4 py-2 rounded-lg text-xs font-bold transition-all",
                         u.isBlocked 
                           ? "bg-emerald-600 text-white hover:bg-emerald-500" 
                           : "bg-rose-600 text-white hover:bg-rose-500"
@@ -1862,73 +2270,15 @@ function UserAdminView({ users, theme }: { users: UserProfile[], theme: 'light' 
                     >
                       {u.isBlocked ? 'Unblock' : 'Block'}
                     </button>
-                    <button 
-                      onClick={() => handleDeleteUser(u.uid)}
-                      className="p-2 rounded-lg bg-rose-600/10 text-rose-400 hover:bg-rose-600/20 transition-all"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </GlassCard>
-
-      {/* Mobile Card View */}
-      <div className="md:hidden space-y-4">
-        {users.map((u) => (
-          <GlassCard key={u.uid} theme={theme} className="p-4 space-y-4">
-            <div className="flex items-center gap-3">
-              <img src={u.photoURL} className="w-12 h-12 rounded-xl" alt="" />
-              <div className="flex-1 min-w-0">
-                <p className={cn("text-sm font-bold truncate", theme === 'dark' ? "text-white" : "text-slate-900")}>{u.displayName}</p>
-                <p className="text-[10px] text-slate-500 truncate">{u.email}</p>
-              </div>
-              <span className={cn(
-                "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0",
-                u.isBlocked ? "bg-rose-500/20 text-rose-400" : "bg-emerald-500/20 text-emerald-400"
-              )}>
-                {u.isBlocked ? 'Blocked' : 'Active'}
-              </span>
-            </div>
-            
-            <div className="flex items-center justify-between gap-4 pt-2 border-t border-white/5">
-              <div className="flex-1">
-                <label className="text-[9px] font-bold uppercase text-slate-500 block mb-1">User Role</label>
-                <select 
-                  value={u.role}
-                  onChange={e => handleChangeRole(u, e.target.value as UserRole)}
-                  className={cn(
-                    "w-full text-xs font-bold uppercase tracking-wider border rounded-lg px-2 py-2 appearance-none bg-no-repeat bg-[right_0.5rem_center] bg-[length:1em_1em]",
-                    theme === 'dark' 
-                      ? "bg-slate-800/50 border-white/10 text-blue-400 focus:border-blue-500/50 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2360a5fa%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
-                      : "bg-white border-slate-200 text-blue-600 focus:border-blue-500 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%232563eb%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
-                  )}
-                >
-                  <option value="student">Student</option>
-                  <option value="faculty">Faculty</option>
-                  <option value="admin">Admin</option>
-                </select>
-              </div>
-              <div className="shrink-0 pt-4">
-                <button 
-                  onClick={() => handleToggleBlock(u)}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-xs font-bold transition-all",
-                    u.isBlocked 
-                      ? "bg-emerald-600 text-white hover:bg-emerald-500" 
-                      : "bg-rose-600 text-white hover:bg-rose-500"
-                  )}
-                >
-                  {u.isBlocked ? 'Unblock' : 'Block'}
-                </button>
-              </div>
-            </div>
-          </GlassCard>
-        ))}
-      </div>
+                  </div>
+                </div>
+              </GlassCard>
+            ))}
+          </div>
+        </>
+      ) : (
+        <PreAuthorizedRolesView theme={theme} />
+      )}
     </div>
   );
 }

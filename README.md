@@ -8,9 +8,7 @@
 
 The **NEU MOA Monitoring System** is a modern web application designed to streamline the lifecycle of partnership agreements. Built with a focus on transparency, security, and user experience, it provides university administrators and faculty with a centralized hub to track, update, and audit institutional partnerships.
 
-✨ **[Try the App Live Here!](https://neu-moa-monitoring-system-230692279419.us-west1.run.app)** ✨
-
-![System Preview](https://github.com/JLNerecina/NEU-MOA-Monitoring-System/blob/main/public/NEU%20MOA%20Monitoring%20System%20Preview.png)
+![System Preview](https://picsum.photos/seed/neu-moa/1200/400?blur=2)
 
 ---
 
@@ -127,11 +125,5 @@ This project is developed for **New Era University**. All rights reserved.
 ---
 
 <p align="center">
-   Made with ❤️ for the NEU Community       
-</p>
-<p align="center">      
-   Created by John Lian R. Nerecina          
-</p>
-<p align="center">
-   Github: @JLNerecina     
+  Made with ❤️ for the NEU Community
 </p>

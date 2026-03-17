@@ -59,7 +59,10 @@ service cloud.firestore {
     function isAdmin() {
       return request.auth != null && (
         (request.auth.token.email == "johnliannerecina@gmail.com") ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin')
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin') ||
+        (request.auth.token.get('email', '') != '' && 
+         exists(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)) && 
+         get(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)).data.role == 'admin')
       );
     }
 
@@ -149,6 +152,11 @@ service cloud.firestore {
       allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && 
                     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
       allow create: if isAuthenticated() && !isBlocked() && isValidNotification(request.resource.data);
+    }
+
+    match /pre_authorized_roles/{email} {
+      allow read: if isAuthenticated() && (isAdmin() || request.auth.token.email == email);
+      allow write: if isAdmin();
     }
 
     match /test/connection {
