@@ -58,11 +58,12 @@ service cloud.firestore {
 
     function isAdmin() {
       return request.auth != null && (
-        (request.auth.token.email == "johnliannerecina@gmail.com") ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin') ||
+        (request.auth.token.get('email', '') == "johnliannerecina@gmail.com") ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin') ||
         (request.auth.token.get('email', '') != '' && 
          exists(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)) && 
-         get(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)).data.role == 'admin')
+         get(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)).data.get('role', '') == 'admin')
       );
     }
 
@@ -124,7 +125,7 @@ service cloud.firestore {
 
     // Rules
     match /users/{userId} {
-      allow read: if isAuthenticated() && (isAdmin() || isOwner(userId));
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
       allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
                     (request.resource.data.role == 'student' || isAdmin());
       allow update: if isAdmin() || 
@@ -155,7 +156,7 @@ service cloud.firestore {
     }
 
     match /pre_authorized_roles/{email} {
-      allow read: if isAuthenticated() && (isAdmin() || request.auth.token.email == email);
+      allow read: if isAuthenticated() && (request.auth.token.get('email', '') == email || isAdmin());
       allow write: if isAdmin();
     }
 
