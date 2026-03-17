@@ -4,7 +4,8 @@ import { signInWithPopup, onAuthStateChanged, signOut, User } from 'firebase/aut
 import { doc, getDoc, setDoc, collection, onSnapshot, query, addDoc, deleteDoc, where } from 'firebase/firestore';
 import { UserProfile, MOA, UserRole, MOAStatus, IndustryType, Activity, AppNotification } from './types';
 import { Layout, GlassCard } from './components/Layout';
-import { LogIn, LogOut, Shield, FileText, Users, Search, Plus, Eye, Trash2, LayoutDashboard, Building2, UserCircle, Sun, Moon, Settings, ChevronLeft, ChevronRight, ChevronDown, Calendar as CalendarIcon, Edit2, X, Check, UserPlus, Lock, Download, EyeOff, Key, History, Bell, Info, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react';
+import { LogIn, LogOut, Shield, FileText, Users, Search, Plus, Eye, Trash2, LayoutDashboard, Building2, UserCircle, Sun, Moon, Settings, ChevronLeft, ChevronRight, ChevronDown, Calendar as CalendarIcon, Edit2, X, Check, UserPlus, Lock, Download, EyeOff, Key, History, Bell, Info, CheckCircle2, AlertTriangle, AlertCircle, BarChart3, Map, MapPin, Globe, RefreshCw, ClipboardList, Star, Upload } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { cn } from './lib/utils';
 import { 
   format, 
@@ -21,6 +22,16 @@ import {
   isValid
 } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+
+// Fix for default marker icon in Leaflet
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 
 const COLLEGES = [
   'College of Accountancy',
@@ -250,7 +261,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [moas, setMoas] = useState<MOA[]>([]);
   const [viewingMoa, setViewingMoa] = useState<MOA | null>(null);
-  const [view, setView] = useState<'dashboard' | 'partners' | 'account'>('dashboard');
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingMoa, setEditingMoa] = useState<MOA | null>(null);
+  const [view, setView] = useState<'dashboard' | 'partners' | 'account' | 'analytics' | 'map' | 'public'>('dashboard');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('theme');
@@ -264,6 +277,7 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showViewDropdown, setShowViewDropdown] = useState(false);
   const [showUserAdmin, setShowUserAdmin] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [collegeFilter, setCollegeFilter] = useState('All');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -329,6 +343,39 @@ export default function App() {
     });
     return () => unsubscribe();
   }, [profile, effectiveRole]);
+
+  // Expiration Alerts Logic
+  useEffect(() => {
+    if (!profile || moas.length === 0 || effectiveRole === 'student') return;
+
+    const checkExpiringMoas = async () => {
+      const today = new Date();
+      const twoMonthsFromNow = addMonths(today, 2);
+
+      const expiring = moas.filter(m => {
+        if (m.isDeleted || m.Status.startsWith('Expired')) return false;
+        const expiryDate = new Date(m.EffectivityDate);
+        return expiryDate > today && expiryDate <= twoMonthsFromNow;
+      });
+
+      for (const moa of expiring) {
+        // Check if we already notified about this today to avoid spam
+        const notificationKey = `notified_expiry_${moa.id}_${format(today, 'yyyy-MM-dd')}`;
+        if (!localStorage.getItem(notificationKey)) {
+          await createNotification(
+            profile.uid,
+            'MOA Expiring Soon',
+            `The agreement with ${moa.Company} will expire on ${format(new Date(moa.EffectivityDate), 'MMM dd, yyyy')}.`,
+            'WARNING',
+            'SYSTEM_ACTIVITY'
+          );
+          localStorage.setItem(notificationKey, 'true');
+        }
+      }
+    };
+
+    checkExpiringMoas();
+  }, [profile, moas, effectiveRole]);
 
   const logActivity = async (action: string, details: string, targetId?: string, targetType?: Activity['targetType']) => {
     if (!profile) return;
@@ -482,7 +529,7 @@ export default function App() {
       if (firebaseUser) {
         if (!firebaseUser.email?.endsWith('@neu.edu.ph') && firebaseUser.email !== 'johnliannerecina@gmail.com') {
           await signOut(auth);
-          alert('Access restricted to @neu.edu.ph accounts.');
+          setAuthError('Access restricted to @neu.edu.ph accounts.');
           setLoading(false);
           return;
         }
@@ -497,6 +544,21 @@ export default function App() {
           if (docSnap.exists()) {
             let data = docSnap.data() as UserProfile;
             
+            // Sync pre-authorized role if it exists and is different
+            try {
+              const preAuthRef = doc(db, 'pre_authorized_roles', firebaseUser.email!);
+              const preAuthSnap = await getDoc(preAuthRef);
+              if (preAuthSnap.exists()) {
+                const preAuthRole = preAuthSnap.data().role as UserRole;
+                if (data.role !== preAuthRole && data.role !== 'admin') {
+                  data = { ...data, role: preAuthRole };
+                  await setDoc(docRef, data);
+                }
+              }
+            } catch (e) {
+              console.error('Error syncing pre-authorized role:', e);
+            }
+
             // Safety check: Ensure owner is always admin
             if (firebaseUser.email === 'johnliannerecina@gmail.com' && data.role !== 'admin') {
               data = { ...data, role: 'admin' };
@@ -505,7 +567,7 @@ export default function App() {
 
             if (data.isBlocked) {
               await signOut(auth);
-              alert('Your account has been blocked. Please contact the administrator.');
+              setAuthError('Your account has been blocked. Please contact the administrator.');
               setLoading(false);
               return;
             }
@@ -627,8 +689,19 @@ export default function App() {
               <h1 className={cn("text-3xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>MOA Monitor</h1>
               <p className={theme === 'dark' ? "text-slate-400" : "text-slate-500"}>NEU Monitoring System</p>
             </div>
+
+            {authError && (
+              <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+                <p className="text-xs font-medium text-rose-500 leading-relaxed">{authError}</p>
+              </div>
+            )}
+
             <button
-              onClick={handleLogin}
+              onClick={() => {
+                setAuthError(null);
+                handleLogin();
+              }}
               className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-lg shadow-blue-600/20"
             >
               <LogIn className="w-5 h-5" />
@@ -684,6 +757,9 @@ export default function App() {
                 const current = [
                   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
                   { id: 'partners', label: 'Partners', icon: Building2 },
+                  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+                  { id: 'map', label: 'Partner Map', icon: Map },
+                  { id: 'public', label: 'Directory', icon: Globe },
                   { id: 'account', label: 'Account', icon: UserCircle },
                 ].find(i => i.id === view);
                 return current ? (
@@ -712,6 +788,9 @@ export default function App() {
                     {[
                       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
                       { id: 'partners', label: 'Partners', icon: Building2 },
+                      ...(effectiveRole !== 'student' ? [{ id: 'analytics', label: 'Analytics', icon: BarChart3 }] : []),
+                      { id: 'map', label: 'Partner Map', icon: Map },
+                      { id: 'public', label: 'Directory', icon: Globe },
                       { id: 'account', label: 'Account', icon: UserCircle },
                     ].map((item) => (
                       <button
@@ -871,6 +950,8 @@ export default function App() {
             setDateRange={setDateRange}
             viewingMoa={viewingMoa}
             setViewingMoa={setViewingMoa}
+            setShowAdd={setShowAdd}
+            setEditingMoa={setEditingMoa}
           />
         )}
 
@@ -885,10 +966,26 @@ export default function App() {
             theme={theme} 
             viewingMoa={viewingMoa} 
             setViewingMoa={setViewingMoa}
+            showAdd={showAdd}
+            setShowAdd={setShowAdd}
+            editingMoa={editingMoa}
+            setEditingMoa={setEditingMoa}
             logActivity={logActivity}
             createNotification={createNotification}
             users={users}
           />
+        )}
+
+        {view === 'analytics' && effectiveProfile && effectiveRole !== 'student' && (
+          <AnalyticsView moas={moas} theme={theme} />
+        )}
+
+        {view === 'map' && effectiveProfile && (
+          <PartnerMapView moas={moas} theme={theme} />
+        )}
+
+        {view === 'public' && (
+          <PublicDirectoryView moas={moas} theme={theme} />
         )}
 
         {view === 'account' && effectiveProfile && (
@@ -920,7 +1017,9 @@ function DashboardView({
   dateRange,
   setDateRange,
   viewingMoa,
-  setViewingMoa
+  setViewingMoa,
+  setShowAdd,
+  setEditingMoa
 }: { 
   profile: UserProfile, 
   moas: MOA[], 
@@ -934,7 +1033,9 @@ function DashboardView({
   dateRange: { start: string, end: string },
   setDateRange: (r: { start: string, end: string }) => void,
   viewingMoa: MOA | null,
-  setViewingMoa: (moa: MOA | null) => void
+  setViewingMoa: (moa: MOA | null) => void,
+  setShowAdd: (show: boolean) => void,
+  setEditingMoa: (moa: MOA | null) => void
 }) {
   const filteredMoas = moas.filter(moa => {
     // Role based visibility
@@ -1194,6 +1295,18 @@ function DashboardView({
                           >
                             <Eye className="w-4 h-4" />
                           </button>
+                          {profile.role !== 'student' && !moa.isDeleted && (
+                            <button 
+                              onClick={() => {
+                                setEditingMoa(moa);
+                                setShowAdd(true);
+                              }}
+                              className={cn("p-2 rounded-lg transition-all hover:scale-110", theme === 'dark' ? "text-slate-400 hover:text-amber-400 hover:bg-amber-500/10" : "text-slate-400 hover:text-amber-600 hover:bg-amber-50")} 
+                              title="Edit"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
                           {profile.role === 'admin' && moa.isDeleted && (
                             <button 
                               onClick={() => onRecover(moa)}
@@ -1250,9 +1363,20 @@ function DashboardView({
                       <Eye className="w-4 h-4" />
                     </button>
                     {profile.role !== 'student' && !moa.isDeleted && (
-                      <button onClick={() => onSoftDelete(moa)} className="p-2 text-rose-400">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <>
+                        <button 
+                          onClick={() => {
+                            setEditingMoa(moa);
+                            setShowAdd(true);
+                          }}
+                          className={cn("p-2 transition-colors", theme === 'dark' ? "text-slate-400 hover:text-amber-400" : "text-slate-400 hover:text-amber-600")}
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => onSoftDelete(moa)} className="p-2 text-rose-400">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -1354,6 +1478,10 @@ function PartnersView({
   theme, 
   viewingMoa, 
   setViewingMoa,
+  showAdd,
+  setShowAdd,
+  editingMoa,
+  setEditingMoa,
   logActivity,
   createNotification,
   users
@@ -1367,12 +1495,14 @@ function PartnersView({
   theme: 'light' | 'dark', 
   viewingMoa: MOA | null, 
   setViewingMoa: (moa: MOA | null) => void,
+  showAdd: boolean,
+  setShowAdd: (show: boolean) => void,
+  editingMoa: MOA | null,
+  setEditingMoa: (moa: MOA | null) => void,
   logActivity: (action: string, details: string, targetId?: string, targetType?: Activity['targetType']) => Promise<void>,
   createNotification: (userId: string, title: string, message: string, type: AppNotification['type'], category: AppNotification['category']) => Promise<void>,
   users: UserProfile[]
 }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingMoa, setEditingMoa] = useState<MOA | null>(null);
   const [newMoa, setNewMoa] = useState<Partial<MOA>>({
     HTEID: '', 
     Company: '', 
@@ -1382,8 +1512,49 @@ function PartnersView({
     IndustryType: 'Private Sector', 
     EffectivityDate: '', 
     Status: 'Processing: Awaiting signature of the MOA draft by HTE partner',
-    college: ''
+    college: profile.college || ''
   });
+
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validateForm = (data: Partial<MOA>) => {
+    const newErrors: Record<string, string> = {};
+    
+    if (!data.Company?.trim()) newErrors.Company = 'Company name is required';
+    if (!data.HTEID?.trim()) newErrors.HTEID = 'HTE ID is required';
+    if (!data.college) newErrors.college = 'College is required';
+    if (!data.Address?.trim()) newErrors.Address = 'Address is required';
+    if (!data.ContactPerson?.trim()) newErrors.ContactPerson = 'Contact person is required';
+    
+    if (!data.Email?.trim()) {
+      newErrors.Email = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.Email)) {
+      newErrors.Email = 'Invalid email format';
+    }
+    
+    if (!data.EffectivityDate) {
+      newErrors.EffectivityDate = 'Effectivity date is required';
+    } else {
+      const date = new Date(data.EffectivityDate);
+      if (isNaN(date.getTime())) {
+        newErrors.EffectivityDate = 'Invalid date format';
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const generateHTEID = () => {
+    const year = new Date().getFullYear();
+    const random = Math.floor(1000 + Math.random() * 9000);
+    const id = `HTE-${year}-${random}`;
+    if (editingMoa) {
+      setEditingMoa({ ...editingMoa, HTEID: id });
+    } else {
+      setNewMoa({ ...newMoa, HTEID: id });
+    }
+  };
 
   const filteredMoas = moas.filter(moa => {
     // Role based visibility
@@ -1430,6 +1601,7 @@ function PartnersView({
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validateForm(newMoa)) return;
     try {
       const moaWithAudit = trackAction({
         ...newMoa,
@@ -1461,6 +1633,23 @@ function PartnersView({
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'moas');
+    }
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingMoa || !validateForm(editingMoa)) return;
+    
+    try {
+      const moaWithAudit = trackAction(editingMoa, 'UPDATE');
+      await onUpdate(moaWithAudit);
+      await logActivity('UPDATE_MOA', `Updated MOA for ${editingMoa.Company}`, editingMoa.id, 'MOA');
+      
+      setEditingMoa(null);
+      setShowAdd(false);
+      setErrors({});
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'moas');
     }
   };
 
@@ -1521,32 +1710,50 @@ function PartnersView({
               {editingMoa ? 'Update the details of the memorandum of agreement.' : 'Enter the details of the new memorandum of agreement.'}
             </p>
           </div>
-          <form onSubmit={editingMoa ? (e) => { e.preventDefault(); onUpdate(editingMoa); setEditingMoa(null); } : handleAdd} className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <form 
+            onSubmit={editingMoa ? handleUpdate : handleAdd} 
+            className="grid grid-cols-1 md:grid-cols-3 gap-6"
+          >
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Company Name</label>
               <input 
                 className={cn(
                   "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20",
-                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500"
+                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500",
+                  errors.Company && "border-rose-500 focus:ring-rose-500/20 focus:border-rose-500"
                 )} 
                 value={editingMoa ? editingMoa.Company : newMoa.Company} 
                 onChange={e => editingMoa ? setEditingMoa({...editingMoa, Company: e.target.value}) : setNewMoa({...newMoa, Company: e.target.value})} 
-                required 
                 placeholder="e.g. Google Philippines"
               />
+              {errors.Company && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.Company}</p>}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">HTE ID</label>
-              <input 
-                className={cn(
-                  "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20",
-                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500"
-                )} 
-                value={editingMoa ? editingMoa.HTEID : newMoa.HTEID} 
-                onChange={e => editingMoa ? setEditingMoa({...editingMoa, HTEID: e.target.value}) : setNewMoa({...newMoa, HTEID: e.target.value})} 
-                required 
-                placeholder="ID-2024-001"
-              />
+              <div className="flex gap-2">
+                <input 
+                  className={cn(
+                    "flex-1 border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20",
+                    theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500",
+                    errors.HTEID && "border-rose-500 focus:ring-rose-500/20 focus:border-rose-500"
+                  )} 
+                  value={editingMoa ? editingMoa.HTEID : newMoa.HTEID} 
+                  onChange={e => editingMoa ? setEditingMoa({...editingMoa, HTEID: e.target.value}) : setNewMoa({...newMoa, HTEID: e.target.value})} 
+                  placeholder="HTE-2024-001"
+                />
+                <button 
+                  type="button"
+                  onClick={generateHTEID}
+                  className={cn(
+                    "px-3 rounded-xl border transition-all hover:bg-blue-600 hover:text-white hover:border-blue-600",
+                    theme === 'dark' ? "border-white/10 text-slate-400" : "border-slate-200 text-slate-600"
+                  )}
+                  title="Generate ID"
+                >
+                  <Key className="w-4 h-4" />
+                </button>
+              </div>
+              {errors.HTEID && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.HTEID}</p>}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">College</label>
@@ -1555,15 +1762,16 @@ function PartnersView({
                   "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20 appearance-none bg-no-repeat bg-[right_1rem_center] bg-[length:1em_1em]",
                   theme === 'dark' 
                     ? "bg-slate-800/50 border-white/10 text-white focus:border-blue-500/50 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2394a3b8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
-                    : "bg-white border-slate-200 text-slate-900 focus:border-blue-500 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2364748b%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
+                    : "bg-white border-slate-200 text-slate-900 focus:border-blue-500 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2364748b%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]",
+                  errors.college && "border-rose-500 focus:ring-rose-500/20 focus:border-rose-500"
                 )} 
                 value={editingMoa ? editingMoa.college : newMoa.college} 
                 onChange={e => editingMoa ? setEditingMoa({...editingMoa, college: e.target.value}) : setNewMoa({...newMoa, college: e.target.value})} 
-                required
               >
                 <option value="" disabled>Select College</option>
                 {COLLEGES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+              {errors.college && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.college}</p>}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Industry Type</label>
@@ -1585,24 +1793,28 @@ function PartnersView({
               <input 
                 className={cn(
                   "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20",
-                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500"
+                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500",
+                  errors.Address && "border-rose-500 focus:ring-rose-500/20 focus:border-rose-500"
                 )} 
                 value={editingMoa ? editingMoa.Address : newMoa.Address} 
                 onChange={e => editingMoa ? setEditingMoa({...editingMoa, Address: e.target.value}) : setNewMoa({...newMoa, Address: e.target.value})} 
                 placeholder="Full business address"
               />
+              {errors.Address && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.Address}</p>}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Contact Person</label>
               <input 
                 className={cn(
                   "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20",
-                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500"
+                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500",
+                  errors.ContactPerson && "border-rose-500 focus:ring-rose-500/20 focus:border-rose-500"
                 )} 
                 value={editingMoa ? editingMoa.ContactPerson : newMoa.ContactPerson} 
                 onChange={e => editingMoa ? setEditingMoa({...editingMoa, ContactPerson: e.target.value}) : setNewMoa({...newMoa, ContactPerson: e.target.value})} 
                 placeholder="Name of representative"
               />
+              {errors.ContactPerson && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.ContactPerson}</p>}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Contact Email</label>
@@ -1610,12 +1822,14 @@ function PartnersView({
                 type="email" 
                 className={cn(
                   "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20",
-                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500"
+                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-white border-slate-200 focus:border-blue-500",
+                  errors.Email && "border-rose-500 focus:ring-rose-500/20 focus:border-rose-500"
                 )} 
                 value={editingMoa ? editingMoa.Email : newMoa.Email} 
                 onChange={e => editingMoa ? setEditingMoa({...editingMoa, Email: e.target.value}) : setNewMoa({...newMoa, Email: e.target.value})} 
                 placeholder="email@company.com"
               />
+              {errors.Email && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.Email}</p>}
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Effectivity Date</label>
@@ -1625,66 +1839,47 @@ function PartnersView({
                 theme={theme}
                 placeholder="Select date"
               />
+              {errors.EffectivityDate && <p className="text-[10px] text-rose-500 ml-1 font-bold">{errors.EffectivityDate}</p>}
             </div>
-            <div className="md:col-span-3 flex justify-end gap-3 pt-4 border-t border-white/5">
-              <button type="button" onClick={() => setShowAdd(false)} className={cn(
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Status</label>
+              <select 
+                className={cn(
+                  "w-full border rounded-xl p-3 text-sm transition-all outline-none focus:ring-2 focus:ring-blue-500/20 appearance-none bg-no-repeat bg-[right_1rem_center] bg-[length:1em_1em]",
+                  theme === 'dark' 
+                    ? "bg-slate-800/50 border-white/10 text-white focus:border-blue-500/50 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2394a3b8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
+                    : "bg-white border-slate-200 text-slate-900 focus:border-blue-500 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2364748b%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
+                )} 
+                value={editingMoa ? editingMoa.Status : newMoa.Status} 
+                onChange={e => editingMoa ? setEditingMoa({...editingMoa, Status: e.target.value as MOAStatus}) : setNewMoa({...newMoa, Status: e.target.value as MOAStatus})}
+              >
+                {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="md:col-span-2 flex justify-end gap-3 pt-4 border-t border-white/5">
+              <button type="button" onClick={() => { setShowAdd(false); setEditingMoa(null); setErrors({}); }} className={cn(
                 "px-8 py-3 rounded-xl font-bold transition-all",
                 theme === 'dark' ? "bg-white/5 hover:bg-white/10 text-slate-300" : "bg-slate-100 hover:bg-slate-200 text-slate-600"
               )}>Cancel</button>
-              <button type="submit" className="px-10 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-500 transition-all">Create Record</button>
+              <button type="submit" className="px-10 py-3 bg-blue-600 text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 hover:bg-blue-500 transition-all">
+                {editingMoa ? 'Save Changes' : 'Create Record'}
+              </button>
             </div>
           </form>
         </GlassCard>
       )}
 
-      {viewingMoa && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <GlassCard theme={theme} className="p-8 border-blue-500/20 shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <div className="mb-6 flex justify-between items-center">
-              <h3 className={cn("text-lg font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>Partner Profile</h3>
-              <button onClick={() => setViewingMoa(null)} className="text-slate-500 hover:text-slate-400">Close</button>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Company Name</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.Company}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">HTE ID</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.HTEID}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">College</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.college}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Industry Type</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.IndustryType}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Address</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.Address}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Contact Person</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.ContactPerson}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Email</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.Email}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Effectivity Date</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.EffectivityDate}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Status</p>
-                <p className={cn("text-sm font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{viewingMoa.Status}</p>
-              </div>
-            </div>
-          </GlassCard>
-        </div>
-      )}
+      <AnimatePresence>
+        {viewingMoa && (
+          <MOADetailView 
+            moa={viewingMoa}
+            onClose={() => setViewingMoa(null)}
+            onUpdate={onUpdate}
+            profile={profile}
+            theme={theme}
+          />
+        )}
+      </AnimatePresence>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
         {filteredMoas.map((moa) => (
@@ -1860,9 +2055,13 @@ function SystemActivityView({ activities, theme }: { activities: Activity[], the
 }
 function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
   const [preAuths, setPreAuths] = useState<{ email: string, role: string }[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+  const [editingPreAuth, setEditingPreAuth] = useState<{ email: string, role: UserRole } | null>(null);
   const [newPreAuth, setNewPreAuth] = useState({ email: '', role: 'admin' as UserRole });
   const [loading, setLoading] = useState(true);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'pre_authorized_roles'), (snapshot) => {
@@ -1875,10 +2074,17 @@ function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
     return () => unsubscribe();
   }, []);
 
+  const filteredPreAuths = preAuths.filter(pa => 
+    pa.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    pa.role.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPreAuth.email.endsWith('@neu.edu.ph') && newPreAuth.email !== 'johnliannerecina@gmail.com') {
-      alert('Only @neu.edu.ph emails are allowed.');
+    setFormError(null);
+    // Basic email validation
+    if (!newPreAuth.email.includes('@')) {
+      setFormError('Please enter a valid email address.');
       return;
     }
     try {
@@ -1891,10 +2097,27 @@ function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
   };
 
   const handleDelete = async (email: string) => {
+    setDeleteConfirm(email);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
     try {
-      await deleteDoc(doc(db, 'pre_authorized_roles', email));
+      await deleteDoc(doc(db, 'pre_authorized_roles', deleteConfirm));
+      setDeleteConfirm(null);
     } catch (error) {
       console.error('Error deleting pre-authorized role:', error);
+    }
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPreAuth) return;
+    try {
+      await setDoc(doc(db, 'pre_authorized_roles', editingPreAuth.email), { role: editingPreAuth.role });
+      setEditingPreAuth(null);
+    } catch (error) {
+      console.error('Error updating pre-authorized role:', error);
     }
   };
 
@@ -1913,25 +2136,41 @@ function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
               </p>
             </div>
           </div>
-          <button 
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-600/20 active:scale-95"
-          >
-            <Plus className="w-4 h-4" /> Add Emails
-          </button>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
+            <div className="relative group flex-1 sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+              <input 
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search emails..."
+                className={cn(
+                  "w-full pl-10 pr-4 py-2.5 rounded-xl border text-xs transition-all outline-none",
+                  theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:border-blue-500/50" : "bg-slate-50 border-slate-200 text-slate-900 focus:border-blue-500"
+                )}
+              />
+            </div>
+            <button 
+              onClick={() => setShowAdd(true)}
+              className="flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-600/20 active:scale-95"
+            >
+              <Plus className="w-4 h-4" /> Add Emails
+            </button>
+          </div>
         </div>
 
         {loading ? (
           <div className="flex justify-center py-12">
             <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : preAuths.length === 0 ? (
+        ) : filteredPreAuths.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-white/5 rounded-3xl">
-            <p className="text-slate-500 text-sm font-medium">No pre-authorized roles found.</p>
+            <p className="text-slate-500 text-sm font-medium">
+              {searchQuery ? 'No matching pre-authorized roles found.' : 'No pre-authorized roles found.'}
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {preAuths.map((pa) => (
+            {filteredPreAuths.map((pa) => (
               <div 
                 key={pa.email} 
                 className={cn(
@@ -1946,12 +2185,20 @@ function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
                       {pa.role}
                     </span>
                   </div>
-                  <button 
-                    onClick={() => handleDelete(pa.email)}
-                    className="p-2 text-slate-500 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button 
+                      onClick={() => setEditingPreAuth({ email: pa.email, role: pa.role as UserRole })}
+                      className="p-2 text-slate-500 hover:text-blue-500 transition-colors"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={() => handleDelete(pa.email)}
+                      className="p-2 text-slate-500 hover:text-rose-500 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
                 <div className="absolute top-0 right-0 w-16 h-16 bg-blue-600/5 rounded-bl-full -mr-8 -mt-8" />
               </div>
@@ -1979,12 +2226,17 @@ function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
                   placeholder="e.g. jcesperanza@neu.edu.ph" 
                   required 
                   value={newPreAuth.email} 
-                  onChange={e => setNewPreAuth({...newPreAuth, email: e.target.value})} 
+                  onChange={e => {
+                    setNewPreAuth({...newPreAuth, email: e.target.value});
+                    setFormError(null);
+                  }} 
                   className={cn(
                     "w-full p-4 rounded-2xl border transition-all outline-none focus:ring-2 focus:ring-blue-500/50",
-                    theme === 'dark' ? "bg-white/5 border-white/10 text-white" : "bg-slate-50 border-slate-200 text-slate-900"
+                    theme === 'dark' ? "bg-white/5 border-white/10 text-white" : "bg-slate-50 border-slate-200 text-slate-900",
+                    formError && "border-rose-500 focus:ring-rose-500/20"
                   )}
                 />
+                {formError && <p className="text-[10px] text-rose-500 ml-1 font-bold">{formError}</p>}
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Assigned Role</label>
@@ -2022,6 +2274,108 @@ function PreAuthorizedRolesView({ theme }: { theme: 'light' | 'dark' }) {
                 </button>
               </div>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {editingPreAuth && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={cn(
+              "w-full max-w-md p-8 rounded-3xl border shadow-2xl",
+              theme === 'dark' ? "bg-slate-900 border-white/10" : "bg-white border-slate-200"
+            )}
+          >
+            <h3 className={cn("text-xl font-bold mb-6", theme === 'dark' ? "text-white" : "text-slate-900")}>Edit Pre-authorized Role</h3>
+            <form onSubmit={handleUpdate} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Email Address</label>
+                <input 
+                  type="email" 
+                  disabled
+                  value={editingPreAuth.email} 
+                  className={cn(
+                    "w-full p-4 rounded-2xl border transition-all outline-none opacity-60 cursor-not-allowed",
+                    theme === 'dark' ? "bg-white/5 border-white/10 text-white" : "bg-slate-50 border-slate-200 text-slate-900"
+                  )}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1">Assigned Role</label>
+                <select 
+                  value={editingPreAuth.role} 
+                  onChange={e => setEditingPreAuth({...editingPreAuth, role: e.target.value as UserRole})} 
+                  className={cn(
+                    "w-full p-4 rounded-2xl border transition-all outline-none focus:ring-2 focus:ring-blue-500/50 appearance-none bg-no-repeat bg-[right_1rem_center] bg-[length:1.2em_1.2em]",
+                    theme === 'dark' 
+                      ? "bg-white/5 border-white/10 text-white bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%2360a5fa%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]" 
+                      : "bg-slate-50 border-slate-200 text-slate-900 bg-[url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20fill%3D%22none%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cpath%20stroke%3D%22%232563eb%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20stroke-width%3D%221.5%22%20d%3D%22m6%208%204%204%204-4%22%2F%3E%3C%2Fsvg%3E')]"
+                  )}
+                >
+                  <option value="admin">Admin</option>
+                  <option value="faculty">Faculty</option>
+                  <option value="student">Student</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setEditingPreAuth(null)} 
+                  className={cn(
+                    "px-6 py-3 rounded-xl text-xs font-bold transition-all",
+                    theme === 'dark' ? "bg-white/5 text-slate-400 hover:bg-white/10" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  )}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="px-8 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-lg shadow-blue-600/20 transition-all active:scale-95"
+                >
+                  Update Role
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className={cn(
+              "w-full max-w-sm p-8 rounded-3xl border shadow-2xl text-center",
+              theme === 'dark' ? "bg-slate-900 border-white/10" : "bg-white border-slate-200"
+            )}
+          >
+            <div className="w-16 h-16 bg-rose-500/10 text-rose-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+              <Trash2 className="w-8 h-8" />
+            </div>
+            <h3 className={cn("text-xl font-bold mb-2", theme === 'dark' ? "text-white" : "text-slate-900")}>Remove Authorization?</h3>
+            <p className="text-slate-500 text-sm mb-8">
+              Are you sure you want to remove pre-authorization for <span className="font-bold text-blue-500">{deleteConfirm}</span>?
+            </p>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setDeleteConfirm(null)}
+                className={cn(
+                  "flex-1 py-3 rounded-xl text-xs font-bold transition-all",
+                  theme === 'dark' ? "bg-white/5 text-slate-400 hover:bg-white/10" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                )}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDelete}
+                className="flex-1 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/20 transition-all active:scale-95"
+              >
+                Remove
+              </button>
+            </div>
           </motion.div>
         </div>
       )}
@@ -2637,6 +2991,826 @@ function AccountView({ profile, theme, moas, activities }: { profile: UserProfil
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function AnalyticsView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' }) {
+  const activeMoas = moas.filter(m => !m.isDeleted);
+  
+  const industryData = [
+    { name: 'Government', value: activeMoas.filter(m => m.IndustryType === 'Government').length },
+    { name: 'Private', value: activeMoas.filter(m => m.IndustryType === 'Private Sector').length },
+    { name: 'Non-Profit', value: activeMoas.filter(m => m.IndustryType === 'Non-Profit Organization').length },
+    { name: 'Educational', value: activeMoas.filter(m => m.IndustryType === 'Educational Institution').length },
+    { name: 'International', value: activeMoas.filter(m => m.IndustryType === 'International Organization').length },
+    { name: 'Others', value: activeMoas.filter(m => m.IndustryType === 'Others').length },
+  ].filter(d => d.value > 0);
+
+  const statusData = [
+    { name: 'Approved', value: activeMoas.filter(m => m.Status.startsWith('Approved')).length },
+    { name: 'Processing', value: activeMoas.filter(m => m.Status.startsWith('Processing')).length },
+    { name: 'Expired/Expiring', value: activeMoas.filter(m => m.Status.startsWith('Expired') || m.Status.startsWith('Expiring')).length },
+  ];
+
+  const collegeData = COLLEGES.map(college => ({
+    name: college.replace('College of ', ''),
+    count: activeMoas.filter(m => m.college === college).length
+  })).filter(d => d.count > 0).sort((a, b) => b.count - a.count);
+
+  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <GlassCard theme={theme} className="p-6">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+              <Building2 className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Total Partners</p>
+              <h3 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{activeMoas.length}</h3>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500">Active and processing partnerships across all colleges.</p>
+        </GlassCard>
+
+        <GlassCard theme={theme} className="p-6">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Approved MOAs</p>
+              <h3 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{statusData[0].value}</h3>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500">Fully signed and active agreements.</p>
+        </GlassCard>
+
+        <GlassCard theme={theme} className="p-6">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Expiring Soon</p>
+              <h3 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>
+                {activeMoas.filter(m => m.Status.startsWith('Expiring')).length}
+              </h3>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500">Agreements requiring renewal within 60 days.</p>
+        </GlassCard>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <GlassCard theme={theme} className="p-8">
+          <h3 className={cn("text-lg font-bold mb-8", theme === 'dark' ? "text-white" : "text-slate-900")}>Industry Distribution</h3>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={industryData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={100}
+                  paddingAngle={5}
+                  dataKey="value"
+                >
+                  {industryData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff',
+                    borderColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+                    borderRadius: '12px',
+                    fontSize: '12px'
+                  }}
+                />
+                <Legend verticalAlign="bottom" height={36}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </GlassCard>
+
+        <GlassCard theme={theme} className="p-8">
+          <h3 className={cn("text-lg font-bold mb-8", theme === 'dark' ? "text-white" : "text-slate-900")}>Partners per College</h3>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={collegeData} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} />
+                <XAxis type="number" hide />
+                <YAxis 
+                  dataKey="name" 
+                  type="category" 
+                  width={150} 
+                  tick={{ fontSize: 10, fill: theme === 'dark' ? '#94a3b8' : '#64748b' }}
+                />
+                <Tooltip 
+                  cursor={{ fill: 'transparent' }}
+                  contentStyle={{ 
+                    backgroundColor: theme === 'dark' ? '#0f172a' : '#ffffff',
+                    borderColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+                    borderRadius: '12px',
+                    fontSize: '12px'
+                  }}
+                />
+                <Bar dataKey="count" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </GlassCard>
+      </div>
+    </div>
+  );
+}
+
+function MapController({ center }: { center: [number, number] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center) {
+      map.setView(center, 14);
+    }
+  }, [center, map]);
+  return null;
+}
+
+function PartnerMapView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' }) {
+  const activeMoas = moas.filter(m => !m.isDeleted && m.Status.startsWith('Approved'));
+  const [mapCenter, setMapCenter] = useState<[number, number]>([14.5995, 120.9842]);
+  const [selectedMoaId, setSelectedMoaId] = useState<string | null>(null);
+
+  const handlePartnerClick = (moa: MOA) => {
+    if (moa.coordinates) {
+      setMapCenter([moa.coordinates.lat, moa.coordinates.lng]);
+      setSelectedMoaId(moa.id || null);
+    }
+  };
+
+  const seedSampleData = async () => {
+    const sampleCoords = [
+      { lat: 14.5995, lng: 120.9842 }, // Manila
+      { lat: 14.5547, lng: 121.0244 }, // Makati
+      { lat: 14.6760, lng: 121.0437 }, // Quezon City
+      { lat: 14.5794, lng: 121.0359 }, // Mandaluyong
+      { lat: 14.5351, lng: 121.0313 }, // Taguig
+      { lat: 14.4445, lng: 120.9473 }, // Cavite
+      { lat: 14.6507, lng: 121.1029 }, // Marikina
+      { lat: 14.5733, lng: 121.0597 }, // Pasig
+    ];
+
+    const moasToUpdate = activeMoas.filter(m => !m.coordinates).slice(0, sampleCoords.length);
+    
+    for (let i = 0; i < moasToUpdate.length; i++) {
+      const moa = moasToUpdate[i];
+      const coords = sampleCoords[i];
+      try {
+        await setDoc(doc(db, 'moas', moa.id!), {
+          ...moa,
+          coordinates: coords
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error seeding data:", error);
+      }
+    }
+  };
+
+  const hasMappedPartners = activeMoas.some(m => m.coordinates);
+
+  return (
+    <div className="space-y-8">
+      <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+        <div>
+          <h3 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>Geographic Partner Map</h3>
+          <p className="text-sm text-slate-500">Visualizing our global network of industry partners and academic collaborators using OpenStreetMap.</p>
+        </div>
+        <div className="flex gap-3">
+          {!hasMappedPartners && activeMoas.length > 0 && (
+            <button 
+              onClick={seedSampleData}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 text-emerald-500 text-xs font-bold hover:bg-emerald-500/20 transition-all"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Seed Sample Map Data
+            </button>
+          )}
+          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-500/10 text-blue-500 text-xs font-bold">
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+            {activeMoas.length} Active Partners
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+        <GlassCard theme={theme} className="lg:col-span-3 h-[600px] relative overflow-hidden group p-0">
+          <MapContainer 
+            center={mapCenter} 
+            zoom={12} 
+            style={{ height: '100%', width: '100%', zIndex: 0 }}
+            className={theme === 'dark' ? 'leaflet-dark' : ''}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <MapController center={mapCenter} />
+            {activeMoas.map(moa => {
+              if (!moa.coordinates) return null;
+              return (
+                <Marker 
+                  key={moa.id} 
+                  position={[moa.coordinates.lat, moa.coordinates.lng]}
+                  eventHandlers={{
+                    click: () => setSelectedMoaId(moa.id || null),
+                  }}
+                >
+                  <Popup>
+                    <div className="p-2 min-w-[150px]">
+                      <h4 className="font-bold text-slate-900 text-sm mb-1">{moa.Company}</h4>
+                      <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">{moa.Address}</p>
+                      <div className="flex items-center justify-between border-t border-slate-100 pt-2 mt-2">
+                        <span className="text-[9px] text-blue-500 font-bold uppercase tracking-wider">{moa.IndustryType}</span>
+                        <span className="text-[9px] text-slate-400">{moa.college}</span>
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
+          </MapContainer>
+          
+          {theme === 'dark' && (
+            <div className="absolute inset-0 pointer-events-none bg-blue-900/10 mix-blend-multiply z-[1]" />
+          )}
+
+          {/* Map Controls Overlay */}
+          <div className="absolute bottom-6 left-6 z-[1000] flex flex-col gap-2">
+            <button 
+              onClick={() => setMapCenter([14.5995, 120.9842])}
+              className={cn(
+                "p-3 rounded-xl border backdrop-blur-xl shadow-lg transition-all hover:scale-110",
+                theme === 'dark' ? "bg-slate-900/80 border-white/10 text-white" : "bg-white/80 border-slate-200 text-slate-900"
+              )}
+              title="Center on Manila"
+            >
+              <Globe className="w-4 h-4" />
+            </button>
+          </div>
+        </GlassCard>
+
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h4 className={cn("text-sm font-bold uppercase tracking-widest text-slate-500", theme === 'dark' ? "text-slate-400" : "text-slate-500")}>Partner Locations</h4>
+            <div className="flex items-center gap-1">
+              <div className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span className="text-[10px] text-slate-500">Mapped</span>
+            </div>
+          </div>
+          <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+            {activeMoas.length === 0 ? (
+              <div className="text-center py-12 opacity-50">
+                <MapPin className="w-8 h-8 mx-auto mb-3 text-slate-400" />
+                <p className="text-xs">No active partners to display.</p>
+              </div>
+            ) : (
+              activeMoas.map((moa) => (
+                <button 
+                  key={moa.id}
+                  onClick={() => handlePartnerClick(moa)}
+                  className={cn(
+                    "w-full text-left p-4 rounded-2xl border transition-all hover:scale-[1.02] group",
+                    selectedMoaId === moa.id
+                      ? "bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20"
+                      : theme === 'dark' 
+                        ? "bg-white/5 border-white/10 hover:bg-white/10 text-white" 
+                        : "bg-white border-slate-200 hover:shadow-lg text-slate-900"
+                  )}
+                >
+                  <div className="flex justify-between items-start mb-1">
+                    <p className="text-xs font-bold truncate pr-2">{moa.Company}</p>
+                    {moa.coordinates ? (
+                      <div className={cn(
+                        "w-2 h-2 rounded-full shadow-[0_0_5px_rgba(16,185,129,0.5)]",
+                        selectedMoaId === moa.id ? "bg-white" : "bg-emerald-500"
+                      )} />
+                    ) : (
+                      <div className="w-2 h-2 rounded-full bg-slate-300" />
+                    )}
+                  </div>
+                  <div className={cn(
+                    "flex items-center gap-2 text-[10px]",
+                    selectedMoaId === moa.id ? "text-blue-100" : "text-slate-500"
+                  )}>
+                    <MapPin className="w-3 h-3" />
+                    <span className="truncate">{moa.Address}</span>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PublicDirectoryView({ moas, theme }: { moas: MOA[], theme: 'light' | 'dark' }) {
+  const publicMoas = moas.filter(m => !m.isDeleted && m.Status.startsWith('Approved'));
+  const [search, setSearch] = useState('');
+
+  const filtered = publicMoas.filter(m => 
+    m.Company.toLowerCase().includes(search.toLowerCase()) ||
+    m.IndustryType.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-8">
+      <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+        <div>
+          <h3 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>Public Partner Directory</h3>
+          <p className="text-sm text-slate-500">Official list of verified university partners and industry collaborators.</p>
+        </div>
+        <div className="relative w-full md:w-96">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input 
+            type="text" 
+            placeholder="Search partners or industries..." 
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className={cn(
+              "w-full pl-12 pr-4 py-3 rounded-2xl border outline-none transition-all",
+              theme === 'dark' ? "bg-white/5 border-white/10 text-white focus:bg-white/10" : "bg-white border-slate-200 text-slate-900 focus:bg-slate-50"
+            )}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filtered.map((moa) => (
+          <motion.div
+            key={moa.id}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={cn(
+              "p-6 rounded-3xl border transition-all hover:shadow-xl group",
+              theme === 'dark' ? "bg-white/5 border-white/10 hover:bg-white/10" : "bg-white border-slate-200 hover:border-blue-200"
+            )}
+          >
+            <div className="flex justify-between items-start mb-4">
+              <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform">
+                <Building2 className="w-6 h-6" />
+              </div>
+              <span className="px-3 py-1 bg-emerald-500/10 text-emerald-500 rounded-full text-[8px] font-bold uppercase tracking-widest">
+                Verified
+              </span>
+            </div>
+            <h4 className={cn("text-lg font-bold mb-1", theme === 'dark' ? "text-white" : "text-slate-900")}>{moa.Company}</h4>
+            <p className="text-xs text-slate-500 mb-4">{moa.IndustryType}</p>
+            <div className="flex items-center gap-2 text-[10px] text-slate-500">
+              <Map className="w-3 h-3" />
+              <span className="truncate">{moa.Address}</span>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MOADetailView({ 
+  moa, 
+  onClose, 
+  onUpdate, 
+  profile, 
+  theme 
+}: { 
+  moa: MOA, 
+  onClose: () => void, 
+  onUpdate: (moa: MOA) => void,
+  profile: UserProfile,
+  theme: 'light' | 'dark'
+}) {
+  const [activeTab, setActiveTab] = useState<'details' | 'checklist' | 'evaluations' | 'history'>('details');
+  const [newEvaluation, setNewEvaluation] = useState({ rating: 5, comment: '' });
+  const [isRenewing, setIsRenewing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const defaultChecklist = [
+    { task: 'Draft MOA prepared', completed: false, updatedAt: '' },
+    { task: 'Sent to Legal Office', completed: false, updatedAt: '' },
+    { task: 'Legal Opinion received', completed: false, updatedAt: '' },
+    { task: 'Approved by VPPA/OP', completed: false, updatedAt: '' },
+    { task: 'Signed by HTE Partner', completed: false, updatedAt: '' },
+    { task: 'Signed by University President', completed: false, updatedAt: '' },
+    { task: 'Notarized', completed: false, updatedAt: '' },
+  ];
+
+  const handleToggleChecklist = (index: number) => {
+    const checklistToUse = moa.checklist && moa.checklist.length > 0 ? moa.checklist : defaultChecklist;
+    const newChecklist = [...checklistToUse];
+    newChecklist[index] = { 
+      ...newChecklist[index], 
+      completed: !newChecklist[index].completed,
+      updatedAt: new Date().toISOString()
+    };
+    onUpdate({ ...moa, checklist: newChecklist });
+  };
+
+  const handleAddEvaluation = () => {
+    if (!newEvaluation.comment.trim()) return;
+    const evaluation = {
+      userId: profile.uid,
+      userName: profile.displayName,
+      rating: newEvaluation.rating,
+      comment: newEvaluation.comment,
+      timestamp: new Date().toISOString()
+    };
+    onUpdate({ ...moa, evaluations: [...(moa.evaluations || []), evaluation] });
+    setNewEvaluation({ rating: 5, comment: '' });
+  };
+
+  const handleRenewal = () => {
+    setIsRenewing(true);
+    // In a real app, this would create a NEW document. 
+    // Here we'll update the current one to "Processing" and add to history.
+    const renewal = {
+      previousId: moa.id!,
+      renewalDate: new Date().toISOString()
+    };
+    onUpdate({ 
+      ...moa, 
+      Status: 'Processing: Awaiting signature of the MOA draft by HTE partner',
+      EffectivityDate: format(addMonths(new Date(), 12), 'yyyy-MM-dd'),
+      renewalHistory: [...(moa.renewalHistory || []), renewal]
+    });
+    setTimeout(() => {
+      setIsRenewing(false);
+      onClose();
+    }, 1000);
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 1024 * 1024) { // 1MB limit for Firestore
+      alert("File size exceeds 1MB. Please upload a smaller file.");
+      return;
+    }
+
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      onUpdate({ ...moa, documentUrl: base64 });
+      setIsUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDeleteDocument = () => {
+    const { documentUrl, ...rest } = moa;
+    onUpdate(rest as MOA);
+    setShowDeleteConfirm(false);
+  };
+
+  const handleDownloadDocument = () => {
+    if (!moa.documentUrl) return;
+    const link = document.createElement('a');
+    link.href = moa.documentUrl;
+    link.download = `MOA_${moa.Company.replace(/\s+/g, '_')}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const currentChecklist = moa.checklist && moa.checklist.length > 0 ? moa.checklist : defaultChecklist;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        className={cn(
+          "w-full max-w-4xl max-h-[90vh] rounded-3xl border shadow-2xl overflow-hidden flex flex-col",
+          theme === 'dark' ? "bg-slate-900 border-white/10" : "bg-white border-slate-200"
+        )}
+      >
+        {/* Header */}
+        <div className="p-8 border-b border-white/5 flex justify-between items-start">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+              <Building2 className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className={cn("text-2xl font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{moa.Company}</h3>
+              <p className="text-sm text-slate-500">{moa.HTEID} • {moa.college}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-xl transition-colors">
+            <X className="w-6 h-6 text-slate-500" />
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex px-8 border-b border-white/5">
+          {[
+            { id: 'details', label: 'Details', icon: FileText },
+            { id: 'checklist', label: 'Progress Checklist', icon: ClipboardList },
+            { id: 'evaluations', label: 'Evaluations', icon: Star },
+            { id: 'history', label: 'History', icon: History },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={cn(
+                "px-6 py-4 text-xs font-bold uppercase tracking-widest flex items-center gap-2 border-b-2 transition-all",
+                activeTab === tab.id 
+                  ? "border-blue-500 text-blue-500" 
+                  : "border-transparent text-slate-500 hover:text-slate-300"
+              )}
+            >
+              <tab.icon className="w-4 h-4" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+          {activeTab === 'details' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="space-y-6">
+                <section>
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-3">Partner Information</h4>
+                  <div className="space-y-4">
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">Industry</span>
+                      <span className={cn("text-xs font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{moa.IndustryType}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">Address</span>
+                      <span className={cn("text-xs font-bold text-right max-w-[200px]", theme === 'dark' ? "text-white" : "text-slate-900")}>{moa.Address}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">Contact Person</span>
+                      <span className={cn("text-xs font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{moa.ContactPerson}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-xs text-slate-500">Email</span>
+                      <span className="text-xs font-bold text-blue-500">{moa.Email}</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section>
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-3">Agreement Status</h4>
+                  <div className="p-4 rounded-2xl bg-blue-500/5 border border-blue-500/10">
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                      <span className="text-xs font-bold text-blue-500">{moa.Status}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500">Expires on: {format(new Date(moa.EffectivityDate), 'MMMM dd, yyyy')}</p>
+                  </div>
+                </section>
+              </div>
+
+              <div className="space-y-6">
+                <section>
+                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-3">Documents</h4>
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    className="hidden" 
+                    accept=".pdf,.doc,.docx" 
+                    onChange={handleFileChange}
+                  />
+                  {moa.documentUrl ? (
+                    <div className={cn(
+                      "p-6 rounded-2xl border flex flex-col items-center justify-center text-center",
+                      theme === 'dark' ? "bg-white/5 border-white/10" : "bg-slate-50 border-slate-200"
+                    )}>
+                      <FileText className="w-8 h-8 text-blue-500 mb-3" />
+                      <p className="text-xs font-bold text-slate-500 mb-1">Signed MOA Document</p>
+                      <p className="text-[10px] text-emerald-500 mb-4">Document Uploaded</p>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={handleDownloadDocument}
+                          className="px-3 py-1.5 bg-blue-600/10 text-blue-500 rounded-lg text-[10px] font-bold hover:bg-blue-600/20 transition-all flex items-center gap-1"
+                        >
+                          <Download className="w-3 h-3" />
+                          Download
+                        </button>
+                        {profile.role !== 'student' && (
+                          <>
+                            <button 
+                              onClick={() => fileInputRef.current?.click()}
+                              className="px-3 py-1.5 bg-amber-600/10 text-amber-500 rounded-lg text-[10px] font-bold hover:bg-amber-600/20 transition-all flex items-center gap-1"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              Edit
+                            </button>
+                            {showDeleteConfirm ? (
+                              <div className="flex items-center gap-2 px-2 py-1 bg-rose-500/5 rounded-lg border border-rose-500/10">
+                                <span className="text-[9px] font-bold text-rose-500 uppercase tracking-tighter">Confirm?</span>
+                                <button 
+                                  onClick={handleDeleteDocument}
+                                  className="px-2 py-0.5 bg-rose-600 text-white rounded-md text-[9px] font-bold hover:bg-rose-700 transition-all"
+                                >
+                                  Yes
+                                </button>
+                                <button 
+                                  onClick={() => setShowDeleteConfirm(false)}
+                                  className="px-2 py-0.5 bg-slate-600 text-white rounded-md text-[9px] font-bold hover:bg-slate-700 transition-all"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button 
+                                onClick={() => setShowDeleteConfirm(true)}
+                                className="px-3 py-1.5 bg-rose-600/10 text-rose-500 rounded-lg text-[10px] font-bold hover:bg-rose-600/20 transition-all flex items-center gap-1"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                Delete
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={cn(
+                      "p-6 rounded-2xl border border-dashed flex flex-col items-center justify-center text-center",
+                      theme === 'dark' ? "bg-white/5 border-white/10" : "bg-slate-50 border-slate-200"
+                    )}>
+                      <Upload className="w-8 h-8 text-slate-600 mb-3" />
+                      <p className="text-xs font-bold text-slate-500 mb-1">Signed MOA Document</p>
+                      <p className="text-[10px] text-slate-600 mb-4">PDF format, max 1MB</p>
+                      <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="px-4 py-2 bg-blue-600/10 text-blue-500 rounded-lg text-[10px] font-bold hover:bg-blue-600/20 transition-all flex items-center gap-2"
+                      >
+                        {isUploading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                        Select File
+                      </button>
+                    </div>
+                  )}
+                </section>
+
+                {profile.role !== 'student' && (
+                  <section>
+                    <h4 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-3">Actions</h4>
+                    <button 
+                      onClick={handleRenewal}
+                      disabled={isRenewing}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20"
+                    >
+                      {isRenewing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                      One-Click Renewal
+                    </button>
+                  </section>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'checklist' && (
+            <div className="space-y-4">
+              {currentChecklist.map((item, i) => (
+                <div 
+                  key={i}
+                  onClick={() => profile.role !== 'student' && handleToggleChecklist(i)}
+                  className={cn(
+                    "p-4 rounded-2xl border flex items-center justify-between transition-all",
+                    item.completed 
+                      ? (theme === 'dark' ? "bg-emerald-500/10 border-emerald-500/20" : "bg-emerald-50 border-emerald-100")
+                      : (theme === 'dark' ? "bg-white/5 border-white/10" : "bg-white border-slate-200"),
+                    profile.role !== 'student' && "cursor-pointer hover:scale-[1.01]"
+                  )}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={cn(
+                      "w-6 h-6 rounded-lg flex items-center justify-center border-2 transition-all",
+                      item.completed 
+                        ? "bg-emerald-500 border-emerald-500 text-white" 
+                        : "border-slate-500 text-transparent"
+                    )}>
+                      <Check className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className={cn("text-sm font-bold", item.completed ? "text-emerald-500" : (theme === 'dark' ? "text-white" : "text-slate-900"))}>
+                        {item.task}
+                      </p>
+                      {item.updatedAt && (
+                        <p className="text-[10px] text-slate-500">Updated {format(new Date(item.updatedAt), 'MMM dd, HH:mm')}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'evaluations' && (
+            <div className="space-y-8">
+              {profile.role !== 'student' && (
+                <div className={cn(
+                  "p-6 rounded-3xl border",
+                  theme === 'dark' ? "bg-white/5 border-white/10" : "bg-slate-50 border-slate-200"
+                )}>
+                  <h4 className="text-sm font-bold mb-4">Add Partner Evaluation</h4>
+                  <div className="flex gap-2 mb-4">
+                    {[1, 2, 3, 4, 5].map(star => (
+                      <button 
+                        key={star}
+                        onClick={() => setNewEvaluation({ ...newEvaluation, rating: star })}
+                        className={cn(
+                          "p-1 transition-all",
+                          newEvaluation.rating >= star ? "text-amber-500" : "text-slate-600"
+                        )}
+                      >
+                        <Star className={cn("w-6 h-6", newEvaluation.rating >= star && "fill-current")} />
+                      </button>
+                    ))}
+                  </div>
+                  <textarea 
+                    placeholder="Share your experience with this partner..."
+                    value={newEvaluation.comment}
+                    onChange={e => setNewEvaluation({ ...newEvaluation, comment: e.target.value })}
+                    className={cn(
+                      "w-full p-4 rounded-2xl border outline-none h-24 text-sm transition-all mb-4",
+                      theme === 'dark' ? "bg-slate-950 border-white/10 text-white" : "bg-white border-slate-200 text-slate-900"
+                    )}
+                  />
+                  <button 
+                    onClick={handleAddEvaluation}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs transition-all"
+                  >
+                    Post Evaluation
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-6">
+                {moa.evaluations && moa.evaluations.length > 0 ? (
+                  moa.evaluations.map((evalItem, i) => (
+                    <div key={i} className="flex gap-4">
+                      <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500 shrink-0">
+                        <UserCircle className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                          <span className={cn("text-xs font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>{evalItem.userName}</span>
+                          <div className="flex gap-0.5">
+                            {[1, 2, 3, 4, 5].map(star => (
+                              <Star key={star} className={cn("w-3 h-3", evalItem.rating >= star ? "text-amber-500 fill-current" : "text-slate-600")} />
+                            ))}
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-500 leading-relaxed">{evalItem.comment}</p>
+                        <p className="text-[8px] text-slate-600 uppercase tracking-widest">{format(new Date(evalItem.timestamp), 'MMMM dd, yyyy')}</p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center py-12">
+                    <Star className="w-12 h-12 text-slate-700 mx-auto mb-4 opacity-20" />
+                    <p className="text-sm text-slate-500">No evaluations yet for this partner.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="space-y-6">
+              <div className="relative pl-8 space-y-8 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-0.5 before:bg-white/5">
+                <div className="relative">
+                  <div className="absolute -left-[27px] top-1 w-4 h-4 rounded-full bg-blue-500 border-4 border-slate-900" />
+                  <p className={cn("text-xs font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>Current Agreement</p>
+                  <p className="text-[10px] text-slate-500">Created on {format(new Date(moa.createdAt || new Date()), 'MMMM dd, yyyy')}</p>
+                </div>
+                {moa.renewalHistory?.map((renewal, i) => (
+                  <div key={i} className="relative">
+                    <div className="absolute -left-[27px] top-1 w-4 h-4 rounded-full bg-emerald-500 border-4 border-slate-900" />
+                    <p className={cn("text-xs font-bold", theme === 'dark' ? "text-white" : "text-slate-900")}>Renewed Agreement</p>
+                    <p className="text-[10px] text-slate-500">Processed on {format(new Date(renewal.renewalDate), 'MMMM dd, yyyy')}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </motion.div>
     </div>
   );
 }

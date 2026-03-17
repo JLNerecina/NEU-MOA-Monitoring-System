@@ -50,6 +50,28 @@ export interface MOA {
   auditTrail?: AuditEntry[];
   createdAt?: any;
   updatedBy?: string;
+  // New fields for enhanced functionality
+  documentUrl?: string;
+  checklist?: {
+    task: string;
+    completed: boolean;
+    updatedAt: string;
+  }[];
+  evaluations?: {
+    userId: string;
+    userName: string;
+    rating: number;
+    comment: string;
+    timestamp: string;
+  }[];
+  renewalHistory?: {
+    previousId: string;
+    renewalDate: string;
+  }[];
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
 }
 
 export interface Activity {

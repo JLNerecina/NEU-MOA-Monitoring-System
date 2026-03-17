@@ -31,7 +31,12 @@
         "college": { "type": "string" },
         "isDeleted": { "type": "boolean" },
         "updatedBy": { "type": "string" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "documentUrl": { "type": "string" },
+        "checklist": { "type": "array" },
+        "evaluations": { "type": "array" },
+        "renewalHistory": { "type": "array" },
+        "coordinates": { "type": "object" }
       },
       "required": ["HTEID", "Company", "Address", "ContactPerson", "Email", "IndustryType", "EffectivityDate", "Status", "college"]
     },

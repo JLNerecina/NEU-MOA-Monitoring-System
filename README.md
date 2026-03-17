@@ -22,21 +22,22 @@ The **NEU MOA Monitoring System** is a modern web application designed to stream
 
 ### 📋 MOA Lifecycle Management
 - **Comprehensive Tracking:** Monitor HTE (Host Training Establishment) IDs, company details, and industry types.
-- **Real-time Status Updates:** Track agreements from "Processing" to "Approved" and "Expired".
-- **Automatic Expiration Alerts:** The system automatically flags agreements expiring within 60 days.
+- **Digital Document Vault:** Securely upload, download, and manage signed MOA documents (PDF/Word) directly within the platform.
+- **Interactive Progress Checklist:** Track the 7-step MOA processing workflow from initial draft to final notarization.
+- **Evaluation System:** Collect and view feedback/ratings for each partnership to ensure quality collaborations.
 
 ### 🕵️ Audit & Transparency
 - **Detailed Audit Trails:** Every action (Create, Update, Delete, Recover, Auto-Update) is logged with a timestamp and the user responsible.
 - **Soft Delete System:** Prevent accidental data loss with a recovery-friendly deletion process.
 
 ### 🤖 Smart Automation
-- **Intelligent Expiration:** Automatically flags MOAs expiring in 2 months.
+- **Intelligent Expiration Alerts:** The system automatically flags agreements expiring within 60 days.
 - **Manual Override Protection:** The system respects manual status updates and won't overwrite user-defined statuses with automatic ones.
 
 ### 🎨 Modern UI/UX
 - **Glassmorphism Design:** A sleek, translucent interface that feels premium and modern.
 - **Adaptive Theme:** Seamlessly switch between **Light** and **Dark** modes.
-- **Responsive Dashboard:** Real-time statistics and data visualization.
+- **Advanced Analytics:** Visualize partnership distribution by college and industry with real-time data visualization (Admin/Faculty only).
 
 ---
 
@@ -56,19 +57,18 @@ The **NEU MOA Monitoring System** is a modern web application designed to stream
 ## 👥 User Roles
 
 ### 🎓 Student
-- View approved MOAs.
-- Search for active partnerships.
+- View approved MOAs and search for active partnerships.
+- Download signed MOA documents for reference.
 
 ### 🏫 Faculty
-- View all MOAs (including processing).
-- Add new MOA entries.
-- Update existing MOA details.
-- Soft-delete and recover records.
+- Full MOA management (Add, Update, Soft-delete).
+- Manage document uploads and track processing checklists.
+- View partnership evaluations and analytics.
 
 ### 🔑 Administrator
-- Full system access.
+- Full system access and configuration.
 - **User Management:** Block/Unblock users, change roles, and delete accounts.
-- **System Configuration:** Manage global settings and audit logs.
+- **System Audit:** Monitor global activity logs and system-wide performance.
 
 ---
 

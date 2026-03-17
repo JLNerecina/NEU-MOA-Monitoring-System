@@ -57,13 +57,15 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return request.auth != null && (
-        (request.auth.token.get('email', '') == "johnliannerecina@gmail.com") ||
+      let email = request.auth.token.get('email', '');
+      return isAuthenticated() && (
+        email == "johnliannerecina@gmail.com" ||
+        email == "johnlian.nerecina@neu.edu.ph" ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin') ||
-        (request.auth.token.get('email', '') != '' && 
-         exists(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)) && 
-         get(/databases/$(database)/documents/pre_authorized_roles/$(request.auth.token.email)).data.get('role', '') == 'admin')
+        (email != '' && 
+         exists(/databases/$(database)/documents/pre_authorized_roles/$(email)) && 
+         get(/databases/$(database)/documents/pre_authorized_roles/$(email)).data.get('role', '') == 'admin')
       );
     }
 
@@ -104,7 +106,12 @@ service cloud.firestore {
              data.IndustryType in validIndustries &&
              data.college is string &&
              (!('isDeleted' in data) || data.isDeleted is bool) &&
-             (!('auditTrail' in data) || data.auditTrail is list);
+             (!('auditTrail' in data) || data.auditTrail is list) &&
+             (!('documentUrl' in data) || data.documentUrl is string) &&
+             (!('checklist' in data) || data.checklist is list) &&
+             (!('evaluations' in data) || data.evaluations is list) &&
+             (!('renewalHistory' in data) || data.renewalHistory is list) &&
+             (!('coordinates' in data) || data.coordinates is map);
     }
 
     function isValidActivity(data) {
@@ -126,13 +133,15 @@ service cloud.firestore {
     // Rules
     match /users/{userId} {
       allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
-      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
-                    (request.resource.data.role == 'student' || isAdmin());
-      allow update: if isAdmin() || 
-                    (isOwner(userId) && 
-                     isValidUser(request.resource.data) && 
-                     request.resource.data.role == resource.data.role &&
-                     request.resource.data.get('isBlocked', false) == resource.data.get('isBlocked', false));
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (isOwner(userId) && 
+         isValidUser(request.resource.data) && 
+         request.resource.data.role == resource.data.role &&
+         request.resource.data.get('isBlocked', false) == resource.data.get('isBlocked', false))
+      );
+      allow delete: if isAdmin();
     }
 
     match /moas/{moaId} {
@@ -157,7 +166,7 @@ service cloud.firestore {
 
     match /pre_authorized_roles/{email} {
       allow read: if isAuthenticated() && (request.auth.token.get('email', '') == email || isAdmin());
-      allow write: if isAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /test/connection {
